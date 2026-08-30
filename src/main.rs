@@ -25,39 +25,15 @@ pub struct Request {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Choice {
-    pub index: u32,
-    pub message: Message,
-    pub finish_reason: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Usage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Response {
-    pub id: String,
-    pub choices: Vec<Choice>,
-    pub usage: Usage,
-}
-
-pub struct Session {
-    client: Client,
-    model: String,
-    endpoint: String,
-    pub history: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Delta {
     pub content: Option<String>,
+    #[serde(alias = "reasoning_content")]
+    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +46,13 @@ pub struct StreamChoice {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamResponse {
     pub choices: Vec<StreamChoice>,
+}
+
+pub struct Session {
+    client: Client,
+    model: String,
+    endpoint: String,
+    pub history: Vec<Message>,
 }
 
 impl Session {
@@ -86,17 +69,17 @@ impl Session {
     }
 
     pub async fn chat(&mut self, user_input: &str) -> Result<String, Box<dyn std::error::Error>> {
-        let new_message = Message {
+        self.history.push(Message {
             role: Role::User,
             content: user_input.to_string(),
-        };
-        self.history.push(new_message);
+        });
 
         let request = Request {
             model: self.model.clone(),
             messages: self.history.clone(),
             temperature: Some(0.7),
             stream: Some(true),
+            reasoning_effort: Some("high".to_string()),
         };
 
         let response = self
@@ -107,53 +90,66 @@ impl Session {
             .await?;
 
         let mut stream = response.bytes_stream();
-        let mut full_text = String::new();
-        let mut buffer = String::new();
+        let mut assistant_response = String::new();
+        let mut network_buffer = String::new();
+        let mut is_reasoning = false;
 
         while let Some(chunk_result) = stream.next().await {
             let bytes = chunk_result?;
-            buffer.push_str(&String::from_utf8_lossy(&bytes));
+            network_buffer.push_str(&String::from_utf8_lossy(&bytes));
 
-            while let Some(newline_idx) = buffer.find('\n') {
-                let line = buffer[..newline_idx].to_string();
-                buffer.drain(..=newline_idx); // Remove the processed line from the buffer
+            while let Some(newline_idx) = network_buffer.find('\n') {
+                let line = network_buffer[..newline_idx].to_string();
+                network_buffer.drain(..=newline_idx);
 
                 let trimmed_line = line.trim();
                 if trimmed_line.is_empty() {
                     continue;
                 }
 
-                // Safely strip prefix without unwrap()
                 if let Some(json_data) = trimmed_line.strip_prefix("data: ") {
                     let json_data = json_data.trim();
-
                     if json_data == "[DONE]" {
                         break;
                     }
 
-                    // Attempt to parse the valid JSON payload
                     if let Ok(stream_res) = serde_json::from_str::<StreamResponse>(json_data) {
                         if let Some(choice) = stream_res.choices.into_iter().next() {
+                            // 1. Handle native reasoning stream (dim gray)
+                            if let Some(reasoning) = choice.delta.reasoning {
+                                if !is_reasoning {
+                                    print!("\x1b[90m");
+                                    is_reasoning = true;
+                                }
+                                print!("{}", reasoning);
+                                io::stdout().flush()?;
+                            }
+
+                            // 2. Handle standard content stream (reset color)
                             if let Some(fragment) = choice.delta.content {
+                                if is_reasoning {
+                                    print!("\x1b[0m");
+                                    is_reasoning = false;
+                                }
                                 print!("{}", fragment);
                                 io::stdout().flush()?;
-                                full_text.push_str(&fragment);
+                                assistant_response.push_str(&fragment);
                             }
                         }
-                    } else {
-                        eprintln!("\n[Warning: Failed to parse JSON chunk: {}]", json_data);
                     }
                 }
             }
         }
-        println!();
+
+        print!("\x1b[0m\n");
+        io::stdout().flush()?;
 
         self.history.push(Message {
             role: Role::Assistant,
-            content: full_text.clone(),
+            content: assistant_response.clone(),
         });
 
-        Ok(full_text)
+        Ok(assistant_response)
     }
 }
 
@@ -165,18 +161,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "You are a helpful assistant.",
     );
 
-    let prompt1 = "Explain Newtons Laws";
-    println!("User: {}", prompt1);
+    println!("Session started. Type 'quit' to exit.\n");
 
-    let reply1 = session.chat(prompt1).await?;
-    println!("Assistant: {}\n", reply1);
+    loop {
+        print!("User: ");
+        io::stdout().flush()?;
 
-    // 3. Execute a second turn to prove history is maintained
-    let prompt2 = "Which of those applies most directly to rocket propulsion?";
-    println!("User: {}", prompt2);
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
 
-    let reply2 = session.chat(prompt2).await?;
-    println!("Assistant: {}", reply2);
+        if trimmed == "quit" || trimmed.is_empty() {
+            break;
+        }
+
+        print!("Assistant: ");
+        io::stdout().flush()?;
+
+        session.chat(trimmed).await?;
+        println!();
+    }
 
     Ok(())
 }
