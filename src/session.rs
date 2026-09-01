@@ -2,15 +2,24 @@ use futures_util::StreamExt;
 use reqwest::Client;
 
 use crate::api::{
-    Delta, FunctionDeclaration, Message, Request, Role, StreamChoice, StreamResponse, Tool,
+    FunctionDeclaration, Message, Request, Role, StreamResponse, Tool,
     ToolCall, ToolCallFunction,
 };
 use crate::tools::execute_tool;
 
-use std::io::{self, Write};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    Reasoning(String),
+    Content(String),
+    ToolExecution { name: String, args: String },
+    Error(String),
+    Done,
+}
+
+#[derive(Debug)]
 pub struct Session {
     client: Client,
     model: String,
@@ -41,7 +50,7 @@ impl Session {
             fs::create_dir_all(&path).map_err(|e| e.to_string())?;
         }
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-        
+
         let folder_name = cwd
             .file_name()
             .and_then(|os_str| os_str.to_str())
@@ -49,7 +58,6 @@ impl Session {
 
         path.push(format!("{}.json", folder_name));
         Ok(path)
-
     }
 
     pub fn load_state(&mut self) -> Result<(), String> {
@@ -90,7 +98,11 @@ impl Session {
         println!();
     }
 
-    pub async fn chat(&mut self, user_input: &str) -> Result<String, Box<dyn std::error::Error>> {
+    pub async fn chat(
+        &mut self,
+        user_input: &str,
+        tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         if !user_input.is_empty() {
             self.history.push(Message {
                 role: Role::User,
@@ -136,7 +148,6 @@ impl Session {
         let mut stream = response.bytes_stream();
         let mut assistant_response = String::new();
         let mut network_buffer = String::new();
-        let mut is_reasoning = false;
 
         let mut active_tool_id = String::new();
         let mut active_tool_name = String::new();
@@ -166,25 +177,14 @@ impl Session {
                             // 1. Handle native reasoning stream (dim gray)
                             if let Some(reasoning) = choice.delta.reasoning {
                                 if !reasoning.is_empty() {
-                                    if !is_reasoning {
-                                        print!("\x1b[90m");
-                                        is_reasoning = true;
-                                    }
-                                    print!("{}", reasoning);
-                                    io::stdout().flush()?;
+                                    let _ = tx.send(StreamEvent::Reasoning(reasoning));
                                 }
                             }
 
                             // 2. Handle standard content stream (reset color)
                             if let Some(fragment) = choice.delta.content {
                                 if !fragment.is_empty() {
-                                    if is_reasoning {
-                                        print!("\n\x1b[0m");
-                                        is_reasoning = false;
-                                    }
-
-                                    print!("{}", fragment);
-                                    io::stdout().flush()?;
+                                    let _ = tx.send(StreamEvent::Content(fragment.clone()));
                                     assistant_response.push_str(&fragment);
                                 }
                             }
@@ -210,14 +210,11 @@ impl Session {
             }
         }
 
-        print!("\x1b[0m\n");
-        io::stdout().flush()?;
-
         if !active_tool_name.is_empty() {
-            println!(
-                "\x1b[36m[System: Executing {} with {}]\x1b[0m",
-                active_tool_name, active_tool_args
-            );
+            let _ = tx.send(StreamEvent::ToolExecution {
+                name: active_tool_name.clone(),
+                args: active_tool_args.clone(),
+            });
 
             self.history.push(Message {
                 role: Role::Assistant,
@@ -246,7 +243,7 @@ impl Session {
                 tool_call_id: Some(active_tool_id),
             });
 
-            return Box::pin(self.chat("")).await;
+            return Box::pin(self.chat("", tx.clone())).await;
         }
 
         self.history.push(Message {
