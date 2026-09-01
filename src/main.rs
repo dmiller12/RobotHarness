@@ -7,10 +7,11 @@ use std::sync::Arc;
 
 use crate::session::{Session, StreamEvent};
 use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, 
-    MouseEvent, MouseEventKind, EnableMouseCapture, DisableMouseCapture
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyEventKind,
+    MouseEvent, MouseEventKind,
 };
 use crossterm::execute;
+use futures::StreamExt;
 use ratatui::widgets::Wrap;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -18,14 +19,13 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     symbols::border,
-    
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
 };
 use ratatui_textarea::TextArea;
-use tokio::sync::{Mutex, mpsc};
 use tokio::select;
-use futures::StreamExt;
+use tokio::sync::{Mutex, mpsc};
+use tui_markdown::from_str;
 
 #[derive(Debug)]
 pub struct App<'a> {
@@ -33,6 +33,9 @@ pub struct App<'a> {
     exit: bool,
     pub is_generating: bool,
     pub was_reasoning: bool,
+
+    pub active_reasoning_buffer: String,
+    pub active_content_buffer: String,
 
     pub network_tx: mpsc::UnboundedSender<StreamEvent>,
     pub network_rx: mpsc::UnboundedReceiver<StreamEvent>,
@@ -42,7 +45,6 @@ pub struct App<'a> {
 
     pub scroll: u16,
     pub auto_scroll: bool,
-
 }
 
 impl<'a> App<'a> {
@@ -52,7 +54,7 @@ impl<'a> App<'a> {
         textarea.set_block(
             Block::bordered()
                 .title(" Prompt ")
-                .border_set(border::THICK)
+                .border_set(border::THICK),
         );
         textarea.set_cursor_line_style(Style::default());
         Self {
@@ -60,12 +62,14 @@ impl<'a> App<'a> {
             exit: false,
             is_generating: false,
             was_reasoning: false,
+            active_reasoning_buffer: String::new(),
+            active_content_buffer: String::new(),
             input_textarea: textarea,
             network_tx: tx,
             network_rx: rx,
             chat_display: Vec::new(),
             scroll: 0,
-            auto_scroll: true
+            auto_scroll: true,
         }
     }
 
@@ -116,48 +120,60 @@ impl<'a> App<'a> {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        let chunks = Layout::vertical([
-            Constraint::Min(0),
-            Constraint::Length(3),
-        ])
-        .split(frame.area());
+        let chunks =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(frame.area());
 
         let history_area = chunks[0];
-        
-        // 1. Calculate how many visual lines the text will occupy, 
-        // accounting for long lines wrapping over the terminal width.
+
+        // Combine static history with live unformatted buffers
+        let mut display_lines = self.chat_display.clone();
+
+        if !self.active_reasoning_buffer.is_empty() {
+            display_lines.push(Line::styled(
+                format!("Thinking: {}", self.active_reasoning_buffer),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        if !self.active_content_buffer.is_empty() {
+            // Split raw lines so explicit newlines work during streaming
+            for raw_line in self.active_content_buffer.lines() {
+                display_lines.push(Line::raw(raw_line.to_string()));
+            }
+        }
+
+        // Calculate total lines for scrolling
         let inner_width = history_area.width.saturating_sub(2).max(1) as usize;
-        let total_lines: u16 = self.chat_display.iter().map(|line| {
-            let len = line.width();
-            (len.saturating_sub(1) / inner_width) as u16 + 1
-        }).sum();
+        let total_lines: u16 = display_lines
+            .iter()
+            .map(|line| {
+                let len = line.width();
+                (len.saturating_sub(1) / inner_width) as u16 + 1
+            })
+            .sum();
 
         let history_height = history_area.height.saturating_sub(2);
         let max_scroll = total_lines.saturating_sub(history_height);
 
-        // 2. Adjust the scroll offset based on user state
         if self.auto_scroll {
             self.scroll = max_scroll;
         } else {
-            // Prevent scrolling past the bottom
             self.scroll = self.scroll.min(max_scroll);
-            // If they scroll all the way to the bottom manually, re-enable auto-scroll
             if self.scroll == max_scroll {
-                self.auto_scroll = true; 
+                self.auto_scroll = true;
             }
         }
 
-        // 3. Render the widgets directly to the frame
         let history_block = Block::bordered()
             .title(Line::from(" Meta-Harness ").centered())
             .border_set(border::THICK);
-            
+
         frame.render_widget(
-            Paragraph::new(self.chat_display.clone())
+            Paragraph::new(display_lines)
                 .block(history_block)
-                .wrap(Wrap { trim: false }) 
-                .scroll((self.scroll, 0)), // Apply the calculated vertical offset
-            history_area
+                .wrap(Wrap { trim: false })
+                .scroll((self.scroll, 0)),
+            history_area,
         );
 
         frame.render_widget(&self.input_textarea, chunks[1]);
@@ -174,19 +190,25 @@ impl<'a> App<'a> {
                 self.scroll = self.scroll.saturating_add(5);
             }
             KeyCode::Enter => {
-                if self.is_generating { return; }
+                if self.is_generating {
+                    return;
+                }
 
                 let prompt = self.input_textarea.lines().join("\n");
-                if prompt.trim().is_empty() { return; }
+                if prompt.trim().is_empty() {
+                    return;
+                }
 
                 self.is_generating = true;
                 self.was_reasoning = false;
                 self.auto_scroll = true;
-                
+
                 // Clear the input box
                 let mut new_textarea = TextArea::default();
                 new_textarea.set_block(
-                    Block::bordered().title(" Generating... ").border_set(border::THICK)
+                    Block::bordered()
+                        .title(" Generating... ")
+                        .border_set(border::THICK),
                 );
                 new_textarea.set_cursor_line_style(Style::default());
                 self.input_textarea = new_textarea;
@@ -196,11 +218,12 @@ impl<'a> App<'a> {
                     Span::styled("User: ", Style::default().fg(Color::Blue).bold()),
                     Span::raw(prompt.clone()),
                 ]));
-                
+
                 // Add Assistant header
-                self.chat_display.push(Line::from(vec![
-                    Span::styled("Assistant: ", Style::default().fg(Color::Green).bold()),
-                ]));
+                self.chat_display.push(Line::from(vec![Span::styled(
+                    "Assistant: ",
+                    Style::default().fg(Color::Green).bold(),
+                )]));
 
                 // Setup background task variables
                 let tx = self.network_tx.clone();
@@ -209,10 +232,10 @@ impl<'a> App<'a> {
                 tokio::spawn(async move {
                     // 1. Lock the async mutex to get a mutable reference to the session
                     let mut session = session_arc.lock().await;
-                    
+
                     // 2. Call the chat method directly on the session
                     let _ = session.chat(&prompt, tx.clone()).await;
-                    
+
                     // 3. Signal completion to the UI
                     let _ = tx.send(StreamEvent::Done);
                 });
@@ -228,30 +251,69 @@ impl<'a> App<'a> {
     fn handle_stream_event(&mut self, event: StreamEvent) {
         match event {
             StreamEvent::Reasoning(text) => {
-                self.was_reasoning = true;
-                self.append_text_with_newlines(&text, Style::default().fg(Color::DarkGray));
+                self.active_reasoning_buffer.push_str(&text);
             }
             StreamEvent::Content(text) => {
-                if self.was_reasoning {
-                    self.chat_display.push(Line::default());
-                    self.was_reasoning = false;
-                }
-                self.append_text_with_newlines(&text, Style::default());
+                self.active_content_buffer.push_str(&text);
             }
             StreamEvent::ToolExecution { name, args } => {
-                self.chat_display.push(Line::from(vec![
-                    Span::styled(format!("\n[System: Executing {} with {}]\n", name, args), Style::default().fg(Color::Cyan)),
-                ]));
-                self.chat_display.push(Line::default());
+                self.chat_display.push(Line::from(vec![Span::styled(
+                    format!("\n[System: Executing {} with {}]\n", name, args),
+                    Style::default().fg(Color::Cyan),
+                )]));
             }
             StreamEvent::Error(err) => {
-                self.chat_display.push(Line::from(vec![
-                    Span::styled(format!("\nError: {}\n", err), Style::default().fg(Color::Red).bold()),
-                ]));
+                self.chat_display.push(Line::from(vec![Span::styled(
+                    format!("\nError: {}\n", err),
+                    Style::default().fg(Color::Red).bold(),
+                )]));
                 self.is_generating = false;
                 self.reset_textarea();
             }
             StreamEvent::Done => {
+                if !self.active_reasoning_buffer.is_empty() {
+                    let parsed_text = from_str(&self.active_reasoning_buffer);
+                    let reasoning_lines: Vec<Line<'static>> = parsed_text
+                        .lines
+                        .into_iter()
+                        .map(|line| {
+                            let owned_spans: Vec<Span<'static>> = line
+                                .spans
+                                .into_iter()
+                                .map(|span| {
+                                    Span::styled(
+                                        span.content.into_owned(),
+                                        span.style.fg(Color::DarkGray),
+                                    )
+                                })
+                                .collect();
+                            Line::from(owned_spans)
+                        })
+                        .collect();
+
+                    self.chat_display.extend(reasoning_lines);
+                    self.active_reasoning_buffer.clear();
+                }
+
+                if !self.active_content_buffer.is_empty() {
+                    let parsed_text = from_str(&self.active_content_buffer);
+                    let content_lines: Vec<Line<'static>> = parsed_text
+                        .lines
+                        .into_iter()
+                        .map(|line| {
+                            let owned_spans: Vec<Span<'static>> = line
+                                .spans
+                                .into_iter()
+                                .map(|span| Span::styled(span.content.into_owned(), span.style))
+                                .collect();
+                            Line::from(owned_spans)
+                        })
+                        .collect();
+
+                    self.chat_display.extend(content_lines);
+                    self.active_content_buffer.clear();
+                }
+
                 self.chat_display.push(Line::default());
                 self.is_generating = false;
                 self.reset_textarea();
@@ -265,7 +327,9 @@ impl<'a> App<'a> {
     fn reset_textarea(&mut self) {
         let mut textarea = TextArea::default();
         textarea.set_block(
-            Block::bordered().title(" Prompt ").border_set(border::THICK)
+            Block::bordered()
+                .title(" Prompt ")
+                .border_set(border::THICK),
         );
         textarea.set_cursor_line_style(Style::default());
         self.input_textarea = textarea;
@@ -285,7 +349,9 @@ impl<'a> App<'a> {
                     self.chat_display.push(Line::default());
                 }
                 let last_idx = self.chat_display.len() - 1;
-                self.chat_display[last_idx].spans.push(Span::styled(part.to_string(), style));
+                self.chat_display[last_idx]
+                    .spans
+                    .push(Span::styled(part.to_string(), style));
             }
         }
     }
@@ -293,21 +359,17 @@ impl<'a> App<'a> {
 
 impl<'a> Widget for &App<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let chunks = Layout::vertical([
-            Constraint::Min(0),
-            Constraint::Length(3),
-        ])
-        .split(area);
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(area);
 
         // 1. Render History Area
         let history_block = Block::bordered()
             .title(Line::from(" Meta-Harness ").centered())
             .border_set(border::THICK);
-            
+
         // Render the accumulated chat display with text wrapping enabled
         Paragraph::new(self.chat_display.clone())
             .block(history_block)
-            .wrap(Wrap { trim: false }) 
+            .wrap(Wrap { trim: false })
             .render(chunks[0], buf);
 
         // 2. Render Input Area
@@ -333,4 +395,3 @@ async fn main() -> io::Result<()> {
 
     Ok(())
 }
-
