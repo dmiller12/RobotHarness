@@ -1,5 +1,6 @@
 mod api;
 mod session;
+mod tools;
 
 use std::io::{self, Write};
 

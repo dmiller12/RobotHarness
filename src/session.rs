@@ -1,7 +1,11 @@
 use futures_util::StreamExt;
 use reqwest::Client;
 
-use crate::api::{Delta, Message, Request, Role, StreamChoice, StreamResponse};
+use crate::api::{
+    Delta, FunctionDeclaration, Message, Request, Role, StreamChoice, StreamResponse, Tool,
+    ToolCall, ToolCallFunction,
+};
+use crate::tools::execute_tool;
 
 use std::io::{self, Write};
 
@@ -20,16 +24,39 @@ impl Session {
             endpoint: endpoint.to_string(),
             history: vec![Message {
                 role: Role::System,
-                content: system_prompt.to_string(),
+                content: Some(system_prompt.to_string()),
+                tool_calls: None,
+                tool_call_id: None,
             }],
         }
     }
 
     pub async fn chat(&mut self, user_input: &str) -> Result<String, Box<dyn std::error::Error>> {
-        self.history.push(Message {
-            role: Role::User,
-            content: user_input.to_string(),
-        });
+        if !user_input.is_empty() {
+            self.history.push(Message {
+                role: Role::User,
+                content: Some(user_input.to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+        let tools = vec![Tool {
+            r#type: "function".to_string(),
+            function: FunctionDeclaration {
+                name: "read_file".to_string(),
+                description: "Read the contents of a file from the local filesystem.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "The relative or absolute path to the file."
+                        }
+                    },
+                    "required": ["path"]
+                }),
+            },
+        }];
 
         let request = Request {
             model: self.model.clone(),
@@ -37,6 +64,7 @@ impl Session {
             temperature: Some(0.7),
             stream: Some(true),
             reasoning_effort: Some("high".to_string()),
+            tools: Some(tools),
         };
 
         let response = self
@@ -50,6 +78,10 @@ impl Session {
         let mut assistant_response = String::new();
         let mut network_buffer = String::new();
         let mut is_reasoning = false;
+
+        let mut active_tool_id = String::new();
+        let mut active_tool_name = String::new();
+        let mut active_tool_args = String::new();
 
         while let Some(chunk_result) = stream.next().await {
             let bytes = chunk_result?;
@@ -97,6 +129,22 @@ impl Session {
                                     assistant_response.push_str(&fragment);
                                 }
                             }
+
+                            if let Some(tool_calls) = choice.delta.tool_calls {
+                                for tc in tool_calls {
+                                    if let Some(id) = tc.id {
+                                        active_tool_id = id;
+                                    }
+
+                                    if let Some(name) = tc.function.name {
+                                        active_tool_name = name;
+                                    }
+
+                                    if let Some(args) = tc.function.arguments {
+                                        active_tool_args.push_str(&args);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -106,9 +154,47 @@ impl Session {
         print!("\x1b[0m\n");
         io::stdout().flush()?;
 
+        if !active_tool_name.is_empty() {
+            println!(
+                "\x1b[36m[System: Executing {} with {}]\x1b[0m",
+                active_tool_name, active_tool_args
+            );
+
+            self.history.push(Message {
+                role: Role::Assistant,
+                content: if assistant_response.is_empty() {
+                    None
+                } else {
+                    Some(assistant_response.clone())
+                },
+                tool_calls: Some(vec![ToolCall {
+                    index: 0,
+                    id: Some(active_tool_id.clone()),
+                    r#type: Some("function".to_string()),
+                    function: ToolCallFunction {
+                        name: Some(active_tool_name.clone()),
+                        arguments: Some(active_tool_args.clone()),
+                    },
+                }]),
+                tool_call_id: None,
+            });
+
+            let tool_output = execute_tool(&active_tool_name, &active_tool_args);
+            self.history.push(Message {
+                role: Role::Tool,
+                content: Some(tool_output),
+                tool_calls: None,
+                tool_call_id: Some(active_tool_id),
+            });
+
+            return Box::pin(self.chat("")).await;
+        }
+
         self.history.push(Message {
             role: Role::Assistant,
-            content: assistant_response.clone(),
+            content: Some(assistant_response.clone()),
+            tool_calls: None,
+            tool_call_id: None,
         });
 
         Ok(assistant_response)
