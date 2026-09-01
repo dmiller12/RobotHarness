@@ -8,6 +8,8 @@ use crate::api::{
 use crate::tools::execute_tool;
 
 use std::io::{self, Write};
+use std::fs;
+use std::path::PathBuf;
 
 pub struct Session {
     client: Client,
@@ -29,6 +31,63 @@ impl Session {
                 tool_call_id: None,
             }],
         }
+    }
+
+    fn get_session_file() -> Result<PathBuf, String> {
+        let mut path = dirs::home_dir().ok_or("Could not resolve home directory")?;
+        path.push(".harness");
+
+        if !path.exists() {
+            fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+        }
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        
+        let folder_name = cwd
+            .file_name()
+            .and_then(|os_str| os_str.to_str())
+            .ok_or("Invalid Unicode in directory name")?;
+
+        path.push(format!("{}.json", folder_name));
+        Ok(path)
+
+    }
+
+    pub fn load_state(&mut self) -> Result<(), String> {
+        let path = Self::get_session_file()?;
+        if path.exists() {
+            let json = fs::read_to_string(path).map_err(|e| e.to_string())?;
+            self.history = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn save_state(&self) -> Result<(), String> {
+        let path = Self::get_session_file()?;
+        let json = serde_json::to_string_pretty(&self.history).map_err(|e| e.to_string())?;
+        fs::write(path, json).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn dump_to_stdout(&self) {
+        for msg in &self.history {
+            let role_name = match msg.role {
+                Role::System => "System",
+                Role::User => "User",
+                Role::Assistant => "Assistant",
+                Role::Tool => "Tool",
+            };
+
+            if let Some(text) = &msg.content {
+                println!("\x1b[1m[{}]\x1b[0m: {}", role_name, text.trim());
+            } else if let Some(tools) = &msg.tool_calls {
+                for tc in tools {
+                    if let Some(name) = &tc.function.name {
+                        println!("\x1b[1m[{}]\x1b[0m: <Executed Tool: {}>", role_name, name);
+                    }
+                }
+            }
+        }
+        println!();
     }
 
     pub async fn chat(&mut self, user_input: &str) -> Result<String, Box<dyn std::error::Error>> {

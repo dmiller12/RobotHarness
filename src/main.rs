@@ -8,11 +8,20 @@ use crate::session::Session;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+
     let mut session = Session::new(
         "qwen3.5:4b-mlx",
         "http://localhost:11434/v1/chat/completions",
         "You are a helpful assistant.",
     );
+
+    if let Err(e) = session.load_state() {
+        eprintln!("Warning: Failed to load previous session: {}", e);
+    } else {
+        println!("Session loaded successfully.");
+        session.dump_to_stdout();
+    }
 
     println!("Session started. Type 'quit' to exit.\n");
 
@@ -32,6 +41,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         io::stdout().flush()?;
 
         session.chat(trimmed).await?;
+        if let Err(e) = session.save_state() {
+            eprintln!("Error saving session state: {}", e);
+        }
         println!();
     }
 
