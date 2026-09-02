@@ -2,8 +2,7 @@ use futures_util::StreamExt;
 use reqwest::Client;
 
 use crate::api::{
-    FunctionDeclaration, Message, Request, Role, StreamResponse, Tool,
-    ToolCall, ToolCallFunction,
+    FunctionDeclaration, Message, Request, Role, StreamResponse, Tool, ToolCall, ToolCallFunction,
 };
 use crate::tools::execute_tool;
 
@@ -16,7 +15,19 @@ pub enum StreamEvent {
     Content(String),
     ToolExecution { name: String, args: String },
     Error(String),
+    PlanUpdated(Vec<Task>),
     Done,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Task {
+    pub description: String,
+    pub status: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SessionData {
+    history: Vec<Message>,
+    plan: Vec<Task>,
 }
 
 #[derive(Debug)]
@@ -24,6 +35,7 @@ pub struct Session {
     client: Client,
     model: String,
     endpoint: String,
+    pub plan: Vec<Task>,
     pub history: Vec<Message>,
 }
 
@@ -33,6 +45,7 @@ impl Session {
             client: Client::new(),
             model: model.to_string(),
             endpoint: endpoint.to_string(),
+            plan: Vec::new(),
             history: vec![Message {
                 role: Role::System,
                 content: Some(system_prompt.to_string()),
@@ -64,14 +77,29 @@ impl Session {
         let path = Self::get_session_file()?;
         if path.exists() {
             let json = fs::read_to_string(path).map_err(|e| e.to_string())?;
-            self.history = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+            // Try parsing the new wrapper format first
+            if let Ok(data) = serde_json::from_str::<SessionData>(&json) {
+                self.history = data.history;
+                self.plan = data.plan;
+            }
+            // Fallback for older saves that were just a raw Vec<Message>
+            else if let Ok(history) = serde_json::from_str::<Vec<Message>>(&json) {
+                self.history = history;
+            } else {
+                return Err("Failed to parse session file".to_string());
+            }
         }
         Ok(())
     }
 
     pub fn save_state(&self) -> Result<(), String> {
         let path = Self::get_session_file()?;
-        let json = serde_json::to_string_pretty(&self.history).map_err(|e| e.to_string())?;
+        let data = SessionData {
+            history: self.history.clone(),
+            plan: self.plan.clone(),
+        };
+        let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
         fs::write(path, json).map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -111,23 +139,51 @@ impl Session {
                 tool_call_id: None,
             });
         }
-        let tools = vec![Tool {
+        let plan_tool = Tool {
             r#type: "function".to_string(),
             function: FunctionDeclaration {
-                name: "read_file".to_string(),
-                description: "Read the contents of a file from the local filesystem.".to_string(),
+                name: "update_plan".to_string(),
+                description: "Update the current execution plan and task statuses.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "The relative or absolute path to the file."
+                        "tasks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "description": { "type": "string" },
+                                    "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
+                                },
+                                "required": ["description", "status"]
+                            }
                         }
                     },
-                    "required": ["path"]
+                    "required": ["tasks"]
                 }),
             },
-        }];
+        };
+        let tools = vec![
+            Tool {
+                r#type: "function".to_string(),
+                function: FunctionDeclaration {
+                    name: "read_file".to_string(),
+                    description: "Read the contents of a file from the local filesystem."
+                        .to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The relative or absolute path to the file."
+                            }
+                        },
+                        "required": ["path"]
+                    }),
+                },
+            },
+            plan_tool,
+        ];
 
         let request = Request {
             model: self.model.clone(),
@@ -235,7 +291,12 @@ impl Session {
                 tool_call_id: None,
             });
 
-            let tool_output = execute_tool(&active_tool_name, &active_tool_args);
+            let tool_output = execute_tool(&active_tool_name, &active_tool_args, self);
+
+            if active_tool_name == "update_plan" {
+                let _ = tx.send(StreamEvent::PlanUpdated(self.plan.clone()));
+            }
+
             self.history.push(Message {
                 role: Role::Tool,
                 content: Some(tool_output),

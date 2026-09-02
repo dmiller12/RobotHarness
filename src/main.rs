@@ -5,7 +5,7 @@ mod tools;
 use std::io::{self};
 use std::sync::Arc;
 
-use crate::session::{Session, StreamEvent};
+use crate::session::{Session, StreamEvent, Task};
 use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyEventKind,
     MouseEvent, MouseEventKind,
@@ -33,6 +33,7 @@ pub struct App<'a> {
     exit: bool,
     pub is_generating: bool,
     pub was_reasoning: bool,
+    pub plan: Vec<Task>,
 
     pub active_reasoning_buffer: String,
     pub active_content_buffer: String,
@@ -57,9 +58,13 @@ impl<'a> App<'a> {
                 .border_set(border::THICK),
         );
         textarea.set_cursor_line_style(Style::default());
+
+        let initial_plan = session.plan.clone();
         Self {
             session: Arc::new(Mutex::new(session)),
             exit: false,
+            plan: initial_plan,
+
             is_generating: false,
             was_reasoning: false,
             active_reasoning_buffer: String::new(),
@@ -80,12 +85,10 @@ impl<'a> App<'a> {
             terminal.draw(|frame| self.draw(frame))?;
 
             select! {
-                // 1. Listen for user keyboard input
                 Some(Ok(event)) = event_reader.next() => {
                     self.handle_event(event);
                 }
 
-                // 2. Listen for incoming tokens from Ollama
                 Some(stream_event) = self.network_rx.recv() => {
                     self.handle_stream_event(stream_event);
                 }
@@ -108,11 +111,9 @@ impl<'a> App<'a> {
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
                 self.auto_scroll = false;
-                // Scroll up 3 lines per tick for smoother trackpad feel
                 self.scroll = self.scroll.saturating_sub(3);
             }
             MouseEventKind::ScrollDown => {
-                // Scroll down 3 lines per tick
                 self.scroll = self.scroll.saturating_add(3);
             }
             _ => {}
@@ -120,10 +121,16 @@ impl<'a> App<'a> {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
+
         let chunks =
             Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(frame.area());
 
-        let history_area = chunks[0];
+        let main_chunks =
+            Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
+                .split(chunks[0]); // inside your existing vertical layout
+
+
+        let history_area = main_chunks[0];
 
         // Combine static history with live unformatted buffers
         let mut display_lines = self.chat_display.clone();
@@ -167,6 +174,23 @@ impl<'a> App<'a> {
         let history_block = Block::bordered()
             .title(Line::from(" Meta-Harness ").centered())
             .border_set(border::THICK);
+
+        let plan_items: Vec<Line> = self
+            .plan
+            .iter()
+            .map(|task| {
+                let prefix = match task.status.as_str() {
+                    "completed" => "[x] ",
+                    "in_progress" => "[>] ",
+                    _ => "[ ] ",
+                };
+                Line::raw(format!("{}{}", prefix, task.description))
+            })
+            .collect();
+            
+        let plan_block = Block::bordered().title(" Plan ").border_set(border::THICK);
+        frame.render_widget(Paragraph::new(plan_items).block(plan_block), main_chunks[1]);
+
 
         frame.render_widget(
             Paragraph::new(display_lines)
@@ -230,13 +254,10 @@ impl<'a> App<'a> {
                 let session_arc = Arc::clone(&self.session);
 
                 tokio::spawn(async move {
-                    // 1. Lock the async mutex to get a mutable reference to the session
                     let mut session = session_arc.lock().await;
 
-                    // 2. Call the chat method directly on the session
                     let _ = session.chat(&prompt, tx.clone()).await;
 
-                    // 3. Signal completion to the UI
                     let _ = tx.send(StreamEvent::Done);
                 });
             }
@@ -261,6 +282,11 @@ impl<'a> App<'a> {
                     format!("\n[System: Executing {} with {}]\n", name, args),
                     Style::default().fg(Color::Cyan),
                 )]));
+            }
+
+            StreamEvent::PlanUpdated(new_plan) => {
+                self.plan = new_plan;
+
             }
             StreamEvent::Error(err) => {
                 self.chat_display.push(Line::from(vec![Span::styled(
