@@ -2,7 +2,9 @@ use std::io::{self};
 use std::sync::Arc;
 
 use crate::events::{handle_stream_event, handle_user_event};
-use crate::session::{Session, StreamEvent, Task};
+use crate::llm_client::LlmClient;
+use crate::llm_client::provider::LlmProvider;
+use crate::session::{SessionData, StreamEvent, Task};
 use crate::ui::draw;
 use crossterm::event::EventStream;
 use futures::StreamExt;
@@ -12,8 +14,10 @@ use tokio::select;
 use tokio::sync::{Mutex, mpsc};
 
 #[derive(Debug)]
-pub struct App<'a> {
-    pub session: Arc<Mutex<Session>>,
+pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
+    pub session: Arc<Mutex<SessionData>>,
+    pub llm_client: Arc<LlmClient<P>>,
+
     exit: bool,
     pub is_generating: bool,
     pub was_reasoning: bool,
@@ -32,8 +36,8 @@ pub struct App<'a> {
     pub auto_scroll: bool,
 }
 
-impl<'a> App<'a> {
-    pub fn new(session: Session) -> Self {
+impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
+    pub fn new(session: Arc<Mutex<SessionData>>, llm_client: LlmClient<P>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut textarea = TextArea::default();
         textarea.set_block(
@@ -43,9 +47,17 @@ impl<'a> App<'a> {
         );
         textarea.set_cursor_line_style(Style::default());
 
-        let initial_plan = session.plan.clone();
+        let initial_plan = {
+            if let Ok(session_guard) = session.try_lock() {
+                session_guard.plan.clone()
+            } else {
+                Vec::new()
+            }
+        };
+
         Self {
-            session: Arc::new(Mutex::new(session)),
+            session: session,
+            llm_client: Arc::new(llm_client),
             exit: false,
             plan: initial_plan,
 

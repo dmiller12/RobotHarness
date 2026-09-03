@@ -12,8 +12,9 @@ use tui_markdown::from_str;
 
 use crate::api::Role;
 use crate::app::App;
+use crate::llm_client::provider::AppProvider;
 
-pub fn draw(app: &mut App, frame: &mut Frame) {
+pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
     let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(frame.area());
 
     let main_chunks = Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
@@ -91,7 +92,7 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
     frame.render_widget(&app.input_textarea, chunks[1]);
 }
 
-pub fn reset_textarea(app: &mut App) {
+pub fn reset_textarea<P: AppProvider>(app: &mut App<P>) {
     let mut textarea = TextArea::default();
     textarea.set_block(
         Block::bordered()
@@ -102,7 +103,7 @@ pub fn reset_textarea(app: &mut App) {
     app.input_textarea = textarea;
 }
 
-pub fn append_chat_display(app: &mut App, role: Role, message: String) {
+pub fn append_chat_display<P: AppProvider>(app: &mut App<P>, role: Role, message: String) {
     let (prefix, color) = match role {
         Role::User => ("User: ", Color::Blue),
         Role::Assistant => ("Assistant: ", Color::Green),
@@ -119,7 +120,7 @@ pub fn append_chat_display(app: &mut App, role: Role, message: String) {
     app.chat_display.push(Line::from(spans));
 }
 
-pub fn append_error(app: &mut App, err: &str) {
+pub fn append_error<P: AppProvider>(app: &mut App<P>, err: &str) {
     app.chat_display.push(Line::from(vec![
         Span::styled("Error: ", Style::default().fg(Color::Red).bold()),
         Span::raw(err.to_string()),
@@ -155,7 +156,7 @@ fn append_parsed_markdown(display: &mut Vec<Line<'static>>, buffer: &mut String,
     buffer.clear();
 }
 
-pub fn commit_markdown_buffers(app: &mut App) {
+pub fn commit_markdown_buffers<P: AppProvider>(app: &mut App<P>) {
     append_parsed_markdown(&mut app.chat_display, &mut app.active_reasoning_buffer, Some(Color::DarkGray));
     append_parsed_markdown(&mut app.chat_display, &mut app.active_content_buffer, None);
     app.chat_display.push(Line::default());

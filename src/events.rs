@@ -1,15 +1,11 @@
-use crate::api::Role;
+use crate::api::{Message, Role};
+use crate::llm_client::provider::AppProvider;
 use crate::ui::{append_chat_display, append_error, commit_markdown_buffers, reset_textarea};
 use crate::{app::App, session::StreamEvent};
 
-use std::sync::Arc;
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 
-use crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyEventKind,
-    MouseEvent, MouseEventKind,
-};
-
-pub fn handle_user_event(app: &mut App, event: Event) {
+pub fn handle_user_event<P: AppProvider>(app: &mut App<P>, event: Event) {
     match event {
         Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
             handle_key_event(app, key_event);
@@ -20,7 +16,7 @@ pub fn handle_user_event(app: &mut App, event: Event) {
         _ => {}
     }
 }
-fn handle_mouse_event(app: &mut App, mouse_event: MouseEvent) {
+fn handle_mouse_event<P: AppProvider>(app: &mut App<P>, mouse_event: MouseEvent) {
     match mouse_event.kind {
         MouseEventKind::ScrollUp => {
             app.auto_scroll = false;
@@ -33,7 +29,7 @@ fn handle_mouse_event(app: &mut App, mouse_event: MouseEvent) {
     }
 }
 
-fn handle_key_event(app: &mut App, key_event: KeyEvent) {
+fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
     match key_event.code {
         KeyCode::Esc => app.exit(),
         KeyCode::PageUp => {
@@ -63,16 +59,21 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
 
             append_chat_display(app, Role::Assistant, String::new());
 
-            // Setup background task variables
-            let tx = app.network_tx.clone();
-            let session_arc = Arc::clone(&app.session);
+            let tx_clone = app.network_tx.clone();
+            let client_clone = app.llm_client.clone();
+            let session_clone = app.session.clone();
 
             tokio::spawn(async move {
-                let mut session = session_arc.lock().await;
-
-                let _ = session.chat(&prompt, tx.clone()).await;
-
-                let _ = tx.send(StreamEvent::Done);
+                {
+                    let mut session = session_clone.lock().await;
+                    session.history.push(Message {
+                        role: Role::User,
+                        content: Some(prompt),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    });
+                }
+                let _ = client_clone.run_agent_loop(session_clone, tx_clone).await;
             });
         }
         _ => {
@@ -83,7 +84,7 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
     }
 }
 
-pub fn handle_stream_event(app: &mut App, event: StreamEvent) {
+pub fn handle_stream_event<P: AppProvider>(app: &mut App<P>, event: StreamEvent) {
     match event {
         StreamEvent::Reasoning(text) => {
             app.active_reasoning_buffer.push_str(&text);
@@ -92,9 +93,12 @@ pub fn handle_stream_event(app: &mut App, event: StreamEvent) {
             app.active_content_buffer.push_str(&text);
         }
         StreamEvent::ToolExecution { name, args } => {
-            append_chat_display(app, Role::Tool, format!("\n[System: Executing {} with {}]\n", name, args));
+            append_chat_display(
+                app,
+                Role::Tool,
+                format!("\n[System: Executing {} with {}]\n", name, args),
+            );
         }
-
         StreamEvent::PlanUpdated(new_plan) => {
             app.plan = new_plan;
         }
@@ -110,4 +114,3 @@ pub fn handle_stream_event(app: &mut App, event: StreamEvent) {
         }
     }
 }
-

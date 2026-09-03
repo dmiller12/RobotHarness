@@ -1,9 +1,11 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-use crate::session::{Session, Task};
+use crate::session::{SessionData, Task};
 
-pub fn execute_tool(name: &str, args_str: &str, session: &mut Session) -> String {
+pub async fn execute_tool(name: &str, args_str: &str,  session_arc: Arc<Mutex<SessionData>>) -> String {
     match name {
         "read_file" => {
             let parsed: Result<serde_json::Value, _> = serde_json::from_str(args_str);
@@ -32,7 +34,11 @@ pub fn execute_tool(name: &str, args_str: &str, session: &mut Session) -> String
             }
 
             if let Ok(args) = serde_json::from_str::<Args>(args_str) {
-                session.plan = args.tasks;
+
+                {
+                let mut session = session_arc.lock().await;
+                    session.plan = args.tasks;
+                }
                 "Plan updated successfully.".to_string()
             } else {
                 "Failed to parse plan arguments.".to_string()
