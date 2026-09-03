@@ -13,7 +13,6 @@ use ratatui_textarea::TextArea;
 use tokio::select;
 use tokio::sync::{Mutex, mpsc};
 
-#[derive(Debug)]
 pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
     pub session: Arc<Mutex<SessionData>>,
     pub llm_client: Arc<LlmClient<P>>,

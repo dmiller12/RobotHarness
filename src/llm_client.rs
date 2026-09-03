@@ -1,21 +1,24 @@
 pub mod openai;
 pub mod provider;
 
-use crate::api::{Message, Role, Tool};
+use crate::api::{Message, Role};
 use crate::session::{SessionData, StreamEvent};
+use crate::tools::ToolRegistry;
 use provider::LlmProvider;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-#[derive(Debug)]
 pub struct LlmClient<P: LlmProvider> {
     provider: P,
-    tools: Vec<Tool>,
+    tool_registry: ToolRegistry,
 }
 
 impl<P: LlmProvider> LlmClient<P> {
-    pub fn new(provider: P, tools: Vec<Tool>) -> Self {
-        Self { provider, tools }
+    pub fn new(provider: P, tool_registry: ToolRegistry) -> Self {
+        Self {
+            provider,
+            tool_registry,
+        }
     }
 
     pub async fn run_agent_loop(
@@ -28,10 +31,11 @@ impl<P: LlmProvider> LlmClient<P> {
                 let session = session_arc.lock().await;
                 session.history.clone()
             };
+            let tools = self.tool_registry.get_api_tools();
 
             let result = self
                 .provider
-                .stream_completion(&messages, &self.tools, tx.clone())
+                .stream_completion(&messages, &tools, tx.clone())
                 .await?;
 
             {
@@ -67,8 +71,10 @@ impl<P: LlmProvider> LlmClient<P> {
                     args: args.clone(),
                 });
 
-                let tool_output =
-                    crate::tools::execute_tool(&name, &args, session_arc.clone()).await;
+                let tool_output = match self.tool_registry.execute_tool(&name, &args).await {
+                    Ok(success_msg) => success_msg,
+                    Err(error_msg) => error_msg, // Feed errors back so the LLM can self-correct
+                };
 
                 if name == "update_plan" {
                     let updated_plan = {
@@ -95,15 +101,18 @@ impl<P: LlmProvider> LlmClient<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm_client::openai::OpenAiProvider;
     use crate::api::Role;
+    use crate::llm_client::openai::OpenAiProvider;
     use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_run_agent_loop() {
-        let provider = OpenAiProvider::new("qwen3.5:4b-mlx", "http://localhost:11434/v1/chat/completions");
-        
-        let client = LlmClient::new(provider, vec![]);
+        let provider = OpenAiProvider::new(
+            "qwen3.5:4b-mlx",
+            "http://localhost:11434/v1/chat/completions",
+        );
+
+        let client = LlmClient::new(provider, ToolRegistry::new());
 
         let mut session_data = SessionData::new("You are a concise test assistant.");
         session_data.history.push(Message {
@@ -112,7 +121,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
         });
-        
+
         let session_arc = Arc::new(Mutex::new(session_data));
 
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -123,15 +132,23 @@ mod tests {
         });
 
         let result = client.run_agent_loop(session_arc.clone(), tx).await;
-        
-        assert!(result.is_ok(), "Agent loop returned an error: {:?}", result.err());
+
+        assert!(
+            result.is_ok(),
+            "Agent loop returned an error: {:?}",
+            result.err()
+        );
 
         let final_session = session_arc.lock().await;
         println!("\n--- Final Session History ---");
         for msg in &final_session.history {
-            println!("[{:?}] {:?}", msg.role, msg.content.as_deref().unwrap_or(""));
+            println!(
+                "[{:?}] {:?}",
+                msg.role,
+                msg.content.as_deref().unwrap_or("")
+            );
         }
-        
+
         assert_eq!(final_session.history.len(), 3);
     }
 }

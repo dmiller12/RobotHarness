@@ -13,6 +13,7 @@ use tui_markdown::from_str;
 use crate::api::Role;
 use crate::app::App;
 use crate::llm_client::provider::AppProvider;
+use crate::session::TaskStatus;
 
 pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
     let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(frame.area());
@@ -69,10 +70,10 @@ pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
         .plan
         .iter()
         .map(|task| {
-            let prefix = match task.status.as_str() {
-                "completed" => "[x] ",
-                "in_progress" => "[>] ",
-                _ => "[ ] ",
+            let prefix = match task.status {
+                TaskStatus::Completed => "[x] ",
+                TaskStatus::InProgress => "[>] ",
+                TaskStatus::Pending => "[ ] ",
             };
             Line::raw(format!("{}{}", prefix, task.description))
         })
@@ -127,7 +128,11 @@ pub fn append_error<P: AppProvider>(app: &mut App<P>, err: &str) {
     ]));
 }
 
-fn append_parsed_markdown(display: &mut Vec<Line<'static>>, buffer: &mut String, override_color: Option<Color>) {
+fn append_parsed_markdown(
+    display: &mut Vec<Line<'static>>,
+    buffer: &mut String,
+    override_color: Option<Color>,
+) {
     if buffer.is_empty() {
         return;
     }
@@ -157,7 +162,11 @@ fn append_parsed_markdown(display: &mut Vec<Line<'static>>, buffer: &mut String,
 }
 
 pub fn commit_markdown_buffers<P: AppProvider>(app: &mut App<P>) {
-    append_parsed_markdown(&mut app.chat_display, &mut app.active_reasoning_buffer, Some(Color::DarkGray));
+    append_parsed_markdown(
+        &mut app.chat_display,
+        &mut app.active_reasoning_buffer,
+        Some(Color::DarkGray),
+    );
     append_parsed_markdown(&mut app.chat_display, &mut app.active_content_buffer, None);
     app.chat_display.push(Line::default());
 }

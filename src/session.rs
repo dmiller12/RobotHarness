@@ -1,4 +1,5 @@
 use crate::api::{Message, Role};
+use schemars::{JsonSchema};
 
 use std::fs;
 use std::path::PathBuf;
@@ -12,10 +13,21 @@ pub enum StreamEvent {
     PlanUpdated(Vec<Task>),
     Done,
 }
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct Task {
+    /// A clear, concise summary of the task to be performed.
     pub description: String,
-    pub status: String,
+    /// The current execution status of the task.
+    pub status: TaskStatus,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

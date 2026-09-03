@@ -20,7 +20,6 @@ pub struct Message {
     pub tool_call_id: Option<String>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Delta {
     pub content: Option<String>,
@@ -39,7 +38,6 @@ pub struct StreamChoice {
 pub struct StreamResponse {
     pub choices: Vec<StreamChoice>,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallFunction {
@@ -64,8 +62,9 @@ pub struct FunctionDeclaration {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tool {

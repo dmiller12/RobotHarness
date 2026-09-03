@@ -1,49 +1,92 @@
-use std::fs;
-use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+pub mod read_file;
+pub mod update_plan;
 
-use crate::session::{SessionData, Task};
+use async_trait::async_trait;
+use std::collections::HashMap;
 
-pub async fn execute_tool(name: &str, args_str: &str,  session_arc: Arc<Mutex<SessionData>>) -> String {
-    match name {
-        "read_file" => {
-            let parsed: Result<serde_json::Value, _> = serde_json::from_str(args_str);
-            match parsed {
-                Ok(val) => {
-                    if let Some(path_str) = val.get("path").and_then(|v| v.as_str()) {
-                        if Path::new(path_str).exists() {
-                            match fs::read_to_string(path_str) {
-                                Ok(contents) => contents,
-                                Err(e) => format!("Error reading file: {}", e),
-                            }
-                        } else {
-                            format!("Error: File not found at path '{}'", path_str)
-                        }
-                    } else {
-                        "Error: Missing 'path' parameter".to_string()
-                    }
-                }
-                Err(e) => format!("Error parsing tool arguments: {}", e),
-            }
+use crate::api::{FunctionDeclaration, Tool};
+
+#[async_trait]
+pub trait AgentTool: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn description(&self) -> &'static str;
+    fn parameters(&self) -> serde_json::Value;
+    async fn execute(&self, args: &str) -> Result<String, String>;
+
+    fn as_api_tool(&self) -> Tool {
+        let mut params = self.parameters();
+
+        if let Some(obj) = params.as_object_mut() {
+            obj.remove("$schema");
+            obj.remove("title");
         }
-        "update_plan" => {
-            #[derive(serde::Deserialize)]
-            struct Args {
-                tasks: Vec<Task>,
-            }
 
-            if let Ok(args) = serde_json::from_str::<Args>(args_str) {
-
-                {
-                let mut session = session_arc.lock().await;
-                    session.plan = args.tasks;
-                }
-                "Plan updated successfully.".to_string()
-            } else {
-                "Failed to parse plan arguments.".to_string()
-            }
+        enforce_strict_schema(&mut params);
+        Tool {
+            r#type: "function".to_string(),
+            function: FunctionDeclaration {
+                name: self.name().to_string(),
+                description: self.description().to_string(),
+                parameters: params,
+                strict: Some(true),
+            },
         }
-        _ => format!("Error: Unknown tool '{}'", name),
+    }
+}
+
+fn enforce_strict_schema(val: &mut serde_json::Value) {
+    if let Some(obj) = val.as_object_mut() {
+        let property_keys: Option<Vec<String>> = obj
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .map(|props| props.keys().cloned().collect());
+
+        if let Some(keys) = property_keys {
+            obj.insert(
+                "additionalProperties".to_string(),
+                serde_json::Value::Bool(false),
+            );
+
+            let all_keys: Vec<serde_json::Value> =
+                keys.into_iter().map(serde_json::Value::String).collect();
+
+            obj.insert("required".to_string(), serde_json::Value::Array(all_keys));
+        }
+
+        for (_, v) in obj.iter_mut() {
+            enforce_strict_schema(v);
+        }
+    } else if let Some(arr) = val.as_array_mut() {
+        for v in arr.iter_mut() {
+            enforce_strict_schema(v);
+        }
+    }
+}
+
+pub struct ToolRegistry {
+    tools: HashMap<String, Box<dyn AgentTool>>,
+}
+
+impl ToolRegistry {
+    pub fn new() -> Self {
+        Self {
+            tools: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, tool: Box<dyn AgentTool>) {
+        self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    pub fn get_api_tools(&self) -> Vec<Tool> {
+        self.tools.values().map(|t| t.as_api_tool()).collect()
+    }
+
+    pub async fn execute_tool(&self, name: &str, args: &str) -> Result<String, String> {
+        if let Some(tool) = self.tools.get(name) {
+            tool.execute(args).await
+        } else {
+            Err(format!("Tool '{}' not found in registry", name))
+        }
     }
 }
