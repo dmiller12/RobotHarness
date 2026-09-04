@@ -1,5 +1,6 @@
-use crate::api::{Message, Role};
 use schemars::{JsonSchema};
+
+use crate::message::Message;
 
 use std::fs;
 use std::path::PathBuf;
@@ -40,11 +41,9 @@ impl SessionData {
     pub fn new(system_prompt: &str) -> Self {
         Self {
             plan: Vec::new(),
-            history: vec![Message {
-                role: Role::System,
-                content: Some(system_prompt.to_string()),
-                tool_calls: None,
-                tool_call_id: None,
+            history: vec![Message::System {
+                content: system_prompt.to_string(),
+                name: None,
             }],
         }
     }

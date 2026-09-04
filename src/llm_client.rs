@@ -1,7 +1,7 @@
 pub mod openai;
 pub mod provider;
 
-use crate::api::{Message, Role};
+use crate::message::Message;
 use crate::session::{SessionData, StreamEvent};
 use crate::tools::ToolRegistry;
 use provider::LlmProvider;
@@ -40,8 +40,7 @@ impl<P: LlmProvider> LlmClient<P> {
 
             {
                 let mut session = session_arc.lock().await;
-                session.history.push(Message {
-                    role: Role::Assistant,
+                session.history.push(Message::Assistant {
                     content: if result.content.is_empty() {
                         None
                     } else {
@@ -52,7 +51,7 @@ impl<P: LlmProvider> LlmClient<P> {
                     } else {
                         Some(result.tool_calls.clone())
                     },
-                    tool_call_id: None,
+                    name: None,
                 });
             }
 
@@ -85,11 +84,9 @@ impl<P: LlmProvider> LlmClient<P> {
                 }
 
                 let mut session = session_arc.lock().await;
-                session.history.push(Message {
-                    role: Role::Tool,
-                    content: Some(tool_output),
-                    tool_calls: None,
-                    tool_call_id: Some(id),
+                session.history.push(Message::Tool {
+                    content: tool_output,
+                    tool_call_id: id,
                 });
             }
         }
@@ -101,8 +98,10 @@ impl<P: LlmProvider> LlmClient<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::Role;
     use crate::llm_client::openai::OpenAiProvider;
+    use crate::message::{Content, ContentBlock, ImageUrlPayload};
+    use base64::prelude::*;
+    use std::fs;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -115,11 +114,9 @@ mod tests {
         let client = LlmClient::new(provider, ToolRegistry::new());
 
         let mut session_data = SessionData::new("You are a concise test assistant.");
-        session_data.history.push(Message {
-            role: Role::User,
-            content: Some("Respond with exactly: 'Agent loop functional.'".to_string()),
-            tool_calls: None,
-            tool_call_id: None,
+        session_data.history.push(Message::User {
+            content: Content::Text("Respond with exactly: 'Agent loop functional.'".to_string()),
+            name: None,
         });
 
         let session_arc = Arc::new(Mutex::new(session_data));
@@ -142,11 +139,63 @@ mod tests {
         let final_session = session_arc.lock().await;
         println!("\n--- Final Session History ---");
         for msg in &final_session.history {
-            println!(
-                "[{:?}] {:?}",
-                msg.role,
-                msg.content.as_deref().unwrap_or("")
-            );
+            println!("[{:?}]", msg);
+        }
+
+        assert_eq!(final_session.history.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_image() {
+        let test_image_path = "test_image.jpg";
+        let image_bytes = fs::read(test_image_path)
+            .unwrap_or_else(|_| panic!("Failed to read {}", test_image_path));
+
+        let base64_string = BASE64_STANDARD.encode(&image_bytes);
+        let provider = OpenAiProvider::new(
+            "qwen3.5:4b-mlx",
+            "http://localhost:11434/v1/chat/completions",
+        );
+
+        let client = LlmClient::new(provider, ToolRegistry::new());
+
+        let mut session_data = SessionData::new("You are a concise assistant.");
+        session_data.history.push(Message::User {
+            content: Content::Blocks(vec![
+                ContentBlock::Text {
+                    text: "What is in the image?".to_string(),
+                },
+                ContentBlock::ImageUrl {
+                    image_url: ImageUrlPayload {
+                        url: format!("data:image/jpeg;base64,{}", base64_string),
+                        detail: None,
+                    },
+                },
+            ]),
+            name: None,
+        });
+
+        let session_arc = Arc::new(Mutex::new(session_data));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                println!("UI Event: {:?}", event);
+            }
+        });
+
+        let result = client.run_agent_loop(session_arc.clone(), tx).await;
+
+        assert!(
+            result.is_ok(),
+            "Agent loop returned an error: {:?}",
+            result.err()
+        );
+
+        let final_session = session_arc.lock().await;
+        println!("\n--- Final Session History ---");
+        for msg in &final_session.history {
+            println!("[{:?}]", msg);
         }
 
         assert_eq!(final_session.history.len(), 3);

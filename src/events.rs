@@ -1,5 +1,7 @@
-use crate::api::{Message, Role};
+use crate::message::Message;
+use crate::api::Role;
 use crate::llm_client::provider::AppProvider;
+use crate::message::Content;
 use crate::ui::{append_chat_display, append_error, commit_markdown_buffers, reset_textarea};
 use crate::{app::App, session::StreamEvent};
 
@@ -66,11 +68,9 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
             tokio::spawn(async move {
                 {
                     let mut session = session_clone.lock().await;
-                    session.history.push(Message {
-                        role: Role::User,
-                        content: Some(prompt),
-                        tool_calls: None,
-                        tool_call_id: None,
+                    session.history.push(Message::User {
+                        content: Content::Text(prompt),
+                        name: None,
                     });
                 }
                 let _ = client_clone.run_agent_loop(session_clone, tx_clone).await;

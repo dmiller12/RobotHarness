@@ -5,6 +5,7 @@ mod llm_client;
 mod session;
 mod tools;
 mod ui;
+mod message;
 
 use std::io::{self};
 
@@ -27,7 +28,8 @@ async fn main() -> io::Result<()> {
         "http://localhost:11434/v1/chat/completions",
     );
 
-    let session_data = SessionData::load().expect("Failed to load session state");
+    // let session_data = SessionData::load().expect("Failed to load session state");
+    let session_data = SessionData::new("You are are a helpful assistant.");
     let session = Arc::new(Mutex::new(session_data));
 
     let mut tool_registry = ToolRegistry::new();

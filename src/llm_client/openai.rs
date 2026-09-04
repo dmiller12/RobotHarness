@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::message::Message;
+
 use crate::{
-    api::{Message, StreamResponse, Tool, ToolCall, ToolCallFunction},
+    api::{StreamResponse, Tool, ToolCall, ToolCallFunction},
     session::StreamEvent,
 };
 
@@ -139,16 +141,15 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
     use crate::api::Role;
+    use crate::message::Content;
 
     #[tokio::test]
     async fn test_openai_stream() {
         let provider = OpenAiProvider::new("qwen3.5:4b-mlx", "http://localhost:11434/v1/chat/completions");
 
-        let messages = vec![Message {
-            role: Role::User,
-            content: Some("Count from 1 to 3.".to_string()),
-            tool_calls: None,
-            tool_call_id: None,
+        let messages = vec![Message::User {
+            content: Content::Text("Count from 1 to 3.".to_string()),
+            name: None,
         }];
 
         let (tx, mut rx) = mpsc::unbounded_channel();

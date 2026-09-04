@@ -1,7 +1,8 @@
 use tokio::sync::mpsc::UnboundedSender;
 use async_trait::async_trait;
 
-use crate::{api::{Message, Tool, ToolCall}, session::StreamEvent};
+use crate::{api::{Tool, ToolCall}, session::StreamEvent};
+use crate::message::Message;
 
 
 pub trait AppProvider: LlmProvider + Send + Sync + 'static {}
