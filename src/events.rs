@@ -1,11 +1,13 @@
-use crate::message::Message;
 use crate::api::Role;
 use crate::llm_client::provider::AppProvider;
-use crate::message::Content;
+use crate::message::Message;
+use crate::message::{Content, ContentBlock, ImageUrlPayload};
 use crate::ui::{append_chat_display, append_error, commit_markdown_buffers, reset_textarea};
 use crate::{app::App, session::StreamEvent};
+use image;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
+use nokhwa::pixel_format::RgbFormat;
 
 pub fn handle_user_event<P: AppProvider>(app: &mut App<P>, event: Event) {
     match event {
@@ -18,6 +20,7 @@ pub fn handle_user_event<P: AppProvider>(app: &mut App<P>, event: Event) {
         _ => {}
     }
 }
+
 fn handle_mouse_event<P: AppProvider>(app: &mut App<P>, mouse_event: MouseEvent) {
     match mouse_event.kind {
         MouseEventKind::ScrollUp => {
@@ -46,10 +49,17 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                 return;
             }
 
-            let prompt = app.input_textarea.lines().join("\n");
-            if prompt.trim().is_empty() {
+            let raw_prompt = app.input_textarea.lines().join("\n");
+            if raw_prompt.trim().is_empty() {
                 return;
             }
+            // TODO: Add user input parsing into separate app commands
+            let (is_frame_req, actual_prompt) =
+                if let Some(stripped) = raw_prompt.strip_prefix("/frame") {
+                    (true, stripped.trim().to_string())
+                } else {
+                    (false, raw_prompt.to_string())
+                };
 
             app.is_generating = true;
             app.was_reasoning = false;
@@ -57,19 +67,64 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
 
             reset_textarea(app);
 
-            append_chat_display(app, Role::User, prompt.clone());
+            append_chat_display(app, Role::User, raw_prompt);
 
             append_chat_display(app, Role::Assistant, String::new());
 
             let tx_clone = app.network_tx.clone();
             let client_clone = app.llm_client.clone();
             let session_clone = app.session.clone();
+            let frame_rx_clone = app.frame_rx.clone();
 
             tokio::spawn(async move {
+                let mut message_blocks = vec![ContentBlock::Text {
+                    text: actual_prompt,
+                }];
+
+                // 3. Only process the camera frame if requested
+                if is_frame_req {
+                    let frame_arc = {
+                        let rx_lock = frame_rx_clone.borrow();
+                        rx_lock.clone()
+                    };
+
+                    if let Some(frame) = frame_arc {
+                        let base64_image = tokio::task::spawn_blocking(move || {
+                            let decoded = frame
+                                .decode_image::<RgbFormat>()
+                                .expect("Failed to decode RGB");
+                            let img = image::DynamicImage::ImageRgb8(decoded);
+
+                            let resized =
+                                img.resize_exact(512, 512, image::imageops::FilterType::Nearest);
+
+                            let mut jpeg_bytes: Vec<u8> = Vec::new();
+                            let mut cursor = std::io::Cursor::new(&mut jpeg_bytes);
+                            resized
+                                .write_to(&mut cursor, image::ImageFormat::Jpeg)
+                                .expect("Failed to encode JPEG");
+
+                            use base64::prelude::*;
+                            BASE64_STANDARD.encode(&jpeg_bytes)
+                        })
+                        .await
+                        .expect("Image processing thread panicked");
+
+                        // 4. Append the image payload to the blocks array
+                        message_blocks.push(ContentBlock::ImageUrl {
+                            image_url: ImageUrlPayload {
+                                url: format!("data:image/jpeg;base64,{}", base64_image),
+                                detail: None,
+                            },
+                        });
+                    }
+                }
+
+                // 5. Push the constructed message to history
                 {
                     let mut session = session_clone.lock().await;
                     session.history.push(Message::User {
-                        content: Content::Text(prompt),
+                        content: Content::Blocks(message_blocks),
                         name: None,
                     });
                 }

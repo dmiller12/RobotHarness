@@ -8,10 +8,11 @@ use crate::session::{SessionData, StreamEvent, Task};
 use crate::ui::draw;
 use crossterm::event::EventStream;
 use futures::StreamExt;
+use nokhwa::Buffer;
 use ratatui::{DefaultTerminal, style::Style, symbols::border, text::Line, widgets::Block};
 use ratatui_textarea::TextArea;
 use tokio::select;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 
 pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
     pub session: Arc<Mutex<SessionData>>,
@@ -27,6 +28,7 @@ pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
 
     pub network_tx: mpsc::UnboundedSender<StreamEvent>,
     pub network_rx: mpsc::UnboundedReceiver<StreamEvent>,
+    pub frame_rx: watch::Receiver<Option<Arc<Buffer>>>,
 
     pub input_textarea: TextArea<'a>,
     pub chat_display: Vec<Line<'static>>,
@@ -36,7 +38,7 @@ pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
 }
 
 impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
-    pub fn new(session: Arc<Mutex<SessionData>>, llm_client: LlmClient<P>) -> Self {
+    pub fn new(session: Arc<Mutex<SessionData>>, llm_client: LlmClient<P>, frame_rx: watch::Receiver<Option<Arc<Buffer>>>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut textarea = TextArea::default();
         textarea.set_block(
@@ -67,6 +69,7 @@ impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
             input_textarea: textarea,
             network_tx: tx,
             network_rx: rx,
+            frame_rx: frame_rx,
             chat_display: Vec::new(),
             scroll: 0,
             auto_scroll: true,
