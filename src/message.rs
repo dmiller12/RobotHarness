@@ -24,7 +24,7 @@ pub enum ContentBlock {
 pub struct ImageUrlPayload {
     /// Format: "data:image/jpeg;base64,{base64_string}" or a public URL
     pub url: String,
-    /// Specifies vision token processing: "low", "high", or "auto"
+    /// Specifies vision token processing: "low", "high", "original", or "auto"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }

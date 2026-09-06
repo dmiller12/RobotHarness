@@ -1,6 +1,7 @@
 use std::io::{self};
 use std::sync::Arc;
 
+use crate::api::Usage;
 use crate::events::{handle_stream_event, handle_user_event};
 use crate::llm_client::LlmClient;
 use crate::llm_client::provider::LlmProvider;
@@ -30,6 +31,8 @@ pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
     pub network_rx: mpsc::UnboundedReceiver<StreamEvent>,
     pub frame_rx: watch::Receiver<Option<Arc<Buffer>>>,
 
+    pub last_usage: Usage,
+
     pub input_textarea: TextArea<'a>,
     pub chat_display: Vec<Line<'static>>,
 
@@ -56,6 +59,7 @@ impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
             }
         };
 
+
         Self {
             session: session,
             llm_client: Arc::new(llm_client),
@@ -70,6 +74,7 @@ impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
             network_tx: tx,
             network_rx: rx,
             frame_rx: frame_rx,
+            last_usage: Usage { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
             chat_display: Vec::new(),
             scroll: 0,
             auto_scroll: true,

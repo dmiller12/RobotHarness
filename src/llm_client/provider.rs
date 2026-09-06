@@ -1,7 +1,7 @@
 use tokio::sync::mpsc::UnboundedSender;
 use async_trait::async_trait;
 
-use crate::{api::{Tool, ToolCall}, session::StreamEvent};
+use crate::{api::{Tool, ToolCall, Usage}, session::StreamEvent};
 use crate::message::Message;
 
 
@@ -11,8 +11,10 @@ impl<T: LlmProvider + Send + Sync + 'static> AppProvider for T {}
 #[derive(Debug)]
 pub struct GenerationResult {
     pub content: String,
-    pub tool_calls: Vec<ToolCall>
+    pub tool_calls: Vec<ToolCall>,
+    pub usage: Option<Usage>,
 }
+
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn stream_completion(

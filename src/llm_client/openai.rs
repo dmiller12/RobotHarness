@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::api::Usage;
 use crate::message::Message;
 
 use crate::{
@@ -31,6 +32,11 @@ impl OpenAiProvider {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct StreamOptions {
+    pub include_usage: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct OpenAiRequest {
     pub model: String,
@@ -38,11 +44,19 @@ pub struct OpenAiRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
 }
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
@@ -55,7 +69,10 @@ impl LlmProvider for OpenAiProvider {
         let request = OpenAiRequest {
             model: self.model.clone(),
             messages: messages.to_vec(),
-            temperature: Some(0.7),
+            temperature: Some(0.6),
+            presence_penalty: Some(0.0),
+            frequency_penalty: Some(1.0),
+            top_p: Some(0.95),
             stream: Some(true),
             reasoning_effort: Some("high".to_string()),
             tools: if tools.is_empty() {
@@ -63,6 +80,9 @@ impl LlmProvider for OpenAiProvider {
             } else {
                 Some(tools.to_vec())
             },
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
         };
 
         let request_builder = self.client.post(&self.endpoint).json(&request);
@@ -72,6 +92,7 @@ impl LlmProvider for OpenAiProvider {
         // Use a BTreeMap to accumulate parallel tool call chunks by their index
         let mut tool_calls_map: BTreeMap<usize, ToolCall> = BTreeMap::new();
 
+        let mut final_usage: Option<Usage> = None;
         while let Some(event_result) = event_source.next().await {
             match event_result {
                 Ok(Event::Open) => continue,
@@ -100,14 +121,16 @@ impl LlmProvider for OpenAiProvider {
                                     let idx = tc_delta.index;
                                     let idx_usize = idx as usize;
                                     let entry =
-                                        tool_calls_map.entry(idx_usize).or_insert_with(|| ToolCall {
-                                            index: idx,
-                                            id: tc_delta.id.clone(),
-                                            r#type: Some("function".to_string()),
-                                            function: ToolCallFunction {
-                                                name: tc_delta.function.name.clone(),
-                                                arguments: Some(String::new()),
-                                            },
+                                        tool_calls_map.entry(idx_usize).or_insert_with(|| {
+                                            ToolCall {
+                                                index: idx,
+                                                id: tc_delta.id.clone(),
+                                                r#type: Some("function".to_string()),
+                                                function: ToolCallFunction {
+                                                    name: tc_delta.function.name.clone(),
+                                                    arguments: Some(String::new()),
+                                                },
+                                            }
                                         });
 
                                     if let Some(args_chunk) = tc_delta.function.arguments {
@@ -117,6 +140,11 @@ impl LlmProvider for OpenAiProvider {
                                     }
                                 }
                             }
+                        }
+
+                        if let Some(usage) = stream_res.usage {
+                            final_usage = Some(usage);
+                            let _ = tx.send(StreamEvent::Usage(usage.clone()));
                         }
                     }
                 }
@@ -133,19 +161,22 @@ impl LlmProvider for OpenAiProvider {
         Ok(GenerationResult {
             content: final_content,
             tool_calls: final_tool_calls,
+            usage: final_usage,
         })
     }
-
-}#[cfg(test)]
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
-    use crate::api::Role;
     use crate::message::Content;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_openai_stream() {
-        let provider = OpenAiProvider::new("qwen3.5:4b-mlx", "http://localhost:11434/v1/chat/completions");
+        let provider = OpenAiProvider::new(
+            "qwen3.5:4b-mlx",
+            "http://localhost:11434/v1/chat/completions",
+        );
 
         let messages = vec![Message::User {
             content: Content::Text("Count from 1 to 3.".to_string()),
@@ -161,7 +192,7 @@ mod tests {
         });
 
         let result = provider.stream_completion(&messages, &[], tx).await;
-        
+
         println!("Final Output: {:?}", result);
     }
 }

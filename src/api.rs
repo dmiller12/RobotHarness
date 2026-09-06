@@ -23,9 +23,18 @@ pub struct StreamChoice {
     pub finish_reason: Option<String>,
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamResponse {
     pub choices: Vec<StreamChoice>,
+    pub usage: Option<Usage>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+pub struct Usage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -62,8 +62,19 @@ pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
         }
     }
 
+    let usage_text = format!(
+        " In: {} | Out: {} | Total: {} ",
+        app.last_usage.prompt_tokens, app.last_usage.completion_tokens, app.last_usage.total_tokens
+    );
     let history_block = Block::bordered()
-        .title(Line::from(" Meta-Harness ").centered())
+        .title(Line::from(" Custom Harness ").centered())
+        .title_bottom(
+            Line::from(Span::styled(
+                usage_text,
+                Style::default().fg(Color::DarkGray),
+            ))
+            .right_aligned(),
+        )
         .border_set(border::THICK);
 
     let plan_items: Vec<Line> = app

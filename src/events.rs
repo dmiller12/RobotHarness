@@ -157,6 +157,9 @@ pub fn handle_stream_event<P: AppProvider>(app: &mut App<P>, event: StreamEvent)
         StreamEvent::PlanUpdated(new_plan) => {
             app.plan = new_plan;
         }
+        StreamEvent::Usage(usage) => {
+            app.last_usage = usage;
+        }
         StreamEvent::Error(err) => {
             append_error(app, &err);
             app.is_generating = false;

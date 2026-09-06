@@ -1,5 +1,6 @@
 use schemars::{JsonSchema};
 
+use crate::api::Usage;
 use crate::message::Message;
 
 use std::fs;
@@ -12,6 +13,7 @@ pub enum StreamEvent {
     ToolExecution { name: String, args: String },
     Error(String),
     PlanUpdated(Vec<Task>),
+    Usage(Usage),
     Done,
 }
 
