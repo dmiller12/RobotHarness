@@ -2,12 +2,12 @@ use crate::api::Role;
 use crate::llm_client::provider::AppProvider;
 use crate::message::Message;
 use crate::message::{Content, ContentBlock, ImageUrlPayload};
+use crate::session::TaskStatus;
 use crate::ui::{append_chat_display, append_error, commit_markdown_buffers, reset_textarea};
+use crate::video::process_and_encode_frame;
 use crate::{app::App, session::StreamEvent};
-use image;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
-use nokhwa::pixel_format::RgbFormat;
 
 pub fn handle_user_event<P: AppProvider>(app: &mut App<P>, event: Event) {
     match event {
@@ -53,13 +53,35 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
             if raw_prompt.trim().is_empty() {
                 return;
             }
-            // TODO: Add user input parsing into separate app commands
-            let (is_frame_req, actual_prompt) =
-                if let Some(stripped) = raw_prompt.strip_prefix("/frame") {
-                    (true, stripped.trim().to_string())
-                } else {
-                    (false, raw_prompt.to_string())
-                };
+
+            let mut actual_prompt = raw_prompt.trim().to_string();
+            let mut is_frame_req = false;
+            let mut active_skill = None;
+
+            let evaluator_skill = app.skill_registry.skills.get("evaluator").cloned();
+
+            if actual_prompt.starts_with('/') {
+                let parts: Vec<String> = actual_prompt
+                    .splitn(2, ' ')
+                    .map(|s| s.to_string())
+                    .collect();
+                let cmd = parts[0].trim_start_matches('/');
+
+                if cmd == "frame" {
+                    is_frame_req = true;
+                    actual_prompt = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
+                } else if let Some(skill) = app.skill_registry.skills.get(cmd) {
+                    active_skill = Some(skill.clone());
+                    actual_prompt = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
+
+                    // Planners inherently need visual context
+                    if cmd == "planner" {
+                        is_frame_req = true;
+                        // Prepend "Goal: " to match the planner.md prompt constraints
+                        actual_prompt = format!("Goal: {}", actual_prompt);
+                    }
+                }
+            }
 
             app.is_generating = true;
             app.was_reasoning = false;
@@ -77,11 +99,14 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
             let frame_rx_clone = app.frame_rx.clone();
 
             tokio::spawn(async move {
+                let is_planner = active_skill
+                    .as_ref()
+                    .map_or(false, |s| s.metadata.name == "planner");
+
                 let mut message_blocks = vec![ContentBlock::Text {
                     text: actual_prompt,
                 }];
 
-                // 3. Only process the camera frame if requested
                 if is_frame_req {
                     let frame_arc = {
                         let rx_lock = frame_rx_clone.borrow();
@@ -89,28 +114,8 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                     };
 
                     if let Some(frame) = frame_arc {
-                        let base64_image = tokio::task::spawn_blocking(move || {
-                            let decoded = frame
-                                .decode_image::<RgbFormat>()
-                                .expect("Failed to decode RGB");
-                            let img = image::DynamicImage::ImageRgb8(decoded);
+                        let base64_image = process_and_encode_frame(frame).await;
 
-                            let resized =
-                                img.resize_exact(512, 512, image::imageops::FilterType::Nearest);
-
-                            let mut jpeg_bytes: Vec<u8> = Vec::new();
-                            let mut cursor = std::io::Cursor::new(&mut jpeg_bytes);
-                            resized
-                                .write_to(&mut cursor, image::ImageFormat::Jpeg)
-                                .expect("Failed to encode JPEG");
-
-                            use base64::prelude::*;
-                            BASE64_STANDARD.encode(&jpeg_bytes)
-                        })
-                        .await
-                        .expect("Image processing thread panicked");
-
-                        // 4. Append the image payload to the blocks array
                         message_blocks.push(ContentBlock::ImageUrl {
                             image_url: ImageUrlPayload {
                                 url: format!("data:image/jpeg;base64,{}", base64_image),
@@ -120,15 +125,86 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                     }
                 }
 
-                // 5. Push the constructed message to history
                 {
                     let mut session = session_clone.lock().await;
+                    if let Some(skill) = active_skill {
+                        session.history.push(Message::System {
+                            content: skill.instructions,
+                            name: None,
+                        });
+                    }
                     session.history.push(Message::User {
                         content: Content::Blocks(message_blocks),
                         name: None,
                     });
                 }
-                let _ = client_clone.run_agent_loop(session_clone, tx_clone).await;
+                let _ = client_clone
+                    .run_agent_loop(session_clone.clone(), tx_clone.clone())
+                    .await;
+                if is_planner {
+                    let eval_session = session_clone.clone();
+                    let eval_client = client_clone.clone();
+                    let eval_rx = frame_rx_clone.clone();
+                    let eval_tx = tx_clone.clone();
+
+                    tokio::spawn(async move {
+                        loop {
+                            {
+                                let session = eval_session.lock().await;
+                                if session.plan.is_empty()
+                                    || session
+                                        .plan
+                                        .iter()
+                                        .all(|t| t.status == TaskStatus::Completed)
+                                {
+                                    break;
+                                }
+                            }
+
+                            let latest_frame_b64 = {
+                                let frame_arc = { eval_rx.borrow().clone() };
+                                if let Some(frame) = frame_arc {
+                                    process_and_encode_frame(frame).await
+                                } else {
+                                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                    continue;
+                                }
+                            };
+
+                            {
+                                let mut session = eval_session.lock().await;
+                                session.prune_intermediate_images();
+
+                                let eval_prompt = evaluator_skill
+                                    .as_ref()
+                                    .map(|s| s.instructions.clone())
+                                    .unwrap_or_else(|| {
+                                        "Evaluate the current scene against the plan.".to_string()
+                                    });
+
+                                session.history.push(Message::User {
+                                    content: Content::Blocks(vec![
+                                        ContentBlock::Text { text: eval_prompt },
+                                        ContentBlock::ImageUrl {
+                                            image_url: ImageUrlPayload {
+                                                url: format!(
+                                                    "data:image/jpeg;base64,{}",
+                                                    latest_frame_b64
+                                                ),
+                                                detail: None,
+                                            },
+                                        },
+                                    ]),
+                                    name: None,
+                                });
+                            }
+
+                            let _ = eval_client
+                                .run_agent_loop(eval_session.clone(), eval_tx.clone())
+                                .await;
+                        }
+                    });
+                }
             });
         }
         _ => {

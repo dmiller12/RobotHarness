@@ -7,13 +7,17 @@ use std::sync::Arc;
 use std::thread;
 use tokio::sync::watch;
 
+use image;
+
+use base64::prelude::*;
+
 use minifb::{Window, WindowOptions};
 
 pub fn start_camera_thread() -> watch::Receiver<Option<Arc<Buffer>>> {
     let (tx, rx) = watch::channel(None);
 
     thread::spawn(move || {
-        let index = CameraIndex::Index(0);
+        let index = CameraIndex::Index(1);
         let target_format = CameraFormat::new(Resolution::new(1280, 720), FrameFormat::YUYV, 30);
         let requested =
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(target_format));
@@ -99,4 +103,24 @@ pub fn run_gui(camera_rx: watch::Receiver<Option<Arc<Buffer>>>) {
             .update_with_buffer(&buffer_u32, 1280, 720)
             .expect("Buffer update failed");
     }
+}
+pub async fn process_and_encode_frame(frame: Arc<nokhwa::Buffer>) -> String {
+    tokio::task::spawn_blocking(move || {
+        let decoded = frame
+            .decode_image::<RgbFormat>()
+            .expect("Failed to decode RGB");
+        let img = image::DynamicImage::ImageRgb8(decoded);
+
+        let resized = img.resize_exact(512, 512, image::imageops::FilterType::Nearest);
+
+        let mut jpeg_bytes: Vec<u8> = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut jpeg_bytes);
+        resized
+            .write_to(&mut cursor, image::ImageFormat::Jpeg)
+            .expect("Failed to encode JPEG");
+
+        BASE64_STANDARD.encode(&jpeg_bytes)
+    })
+    .await
+    .expect("Image processing thread panicked")
 }

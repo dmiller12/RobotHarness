@@ -7,6 +7,7 @@ mod session;
 mod tools;
 mod ui;
 mod video;
+mod skill;
 
 use std::io::{self};
 
@@ -14,6 +15,7 @@ use crate::app::App;
 use crate::llm_client::LlmClient;
 use crate::llm_client::openai::OpenAiProvider;
 use crate::session::SessionData;
+use crate::skill::SkillRegistry;
 use crate::tools::ToolRegistry;
 use crate::tools::read_file::ReadFileTool;
 use crate::tools::update_plan::UpdatePlanTool;
@@ -47,11 +49,14 @@ fn main() -> io::Result<()> {
                 session: session.clone(),
             }));
 
+
             let client = LlmClient::new(provider, tool_registry);
 
             let mut terminal = ratatui::init();
             execute!(io::stdout(), EnableMouseCapture).unwrap();
-            let mut app = App::new(session, client, agent_camera_rx);
+
+            let skill_registry = SkillRegistry::load_from_directory("./skills");
+            let mut app = App::new(session, client, agent_camera_rx, skill_registry);
             let _app_result = app.run(&mut terminal).await;
             execute!(io::stdout(), DisableMouseCapture).unwrap();
             ratatui::restore();

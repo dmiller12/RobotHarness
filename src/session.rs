@@ -1,7 +1,7 @@
-use schemars::{JsonSchema};
+use schemars::JsonSchema;
 
 use crate::api::Usage;
-use crate::message::Message;
+use crate::message::{Content, ContentBlock, Message};
 
 use std::fs;
 use std::path::PathBuf;
@@ -47,6 +47,47 @@ impl SessionData {
                 content: system_prompt.to_string(),
                 name: None,
             }],
+        }
+    }
+    pub fn prune_intermediate_images(&mut self) {
+        let mut image_msg_indices = Vec::new();
+
+        for (i, msg) in self.history.iter().enumerate() {
+            if let Message::User {
+                content: Content::Blocks(blocks),
+                ..
+            } = msg
+            {
+                if blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ImageUrl { .. }))
+                {
+                    image_msg_indices.push(i);
+                }
+            }
+        }
+
+        if image_msg_indices.len() <= 2 {
+            return;
+        }
+
+        let middle_indices = &image_msg_indices[1..image_msg_indices.len() - 1];
+
+        for &idx in middle_indices {
+            // Remove `ref mut` and just bind `blocks`
+            if let Message::User {
+                content: Content::Blocks(blocks),
+                ..
+            } = &mut self.history[idx]
+            {
+                for block in blocks.iter_mut() {
+                    if matches!(block, ContentBlock::ImageUrl { .. }) {
+                        *block = ContentBlock::Text {
+                            text: "[Previous camera frame omitted to save memory]".to_string(),
+                        };
+                    }
+                }
+            }
         }
     }
 

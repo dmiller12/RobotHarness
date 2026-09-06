@@ -6,6 +6,7 @@ use crate::events::{handle_stream_event, handle_user_event};
 use crate::llm_client::LlmClient;
 use crate::llm_client::provider::LlmProvider;
 use crate::session::{SessionData, StreamEvent, Task};
+use crate::skill::SkillRegistry;
 use crate::ui::draw;
 use crossterm::event::EventStream;
 use futures::StreamExt;
@@ -31,6 +32,8 @@ pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
     pub network_rx: mpsc::UnboundedReceiver<StreamEvent>,
     pub frame_rx: watch::Receiver<Option<Arc<Buffer>>>,
 
+    pub skill_registry: SkillRegistry,
+
     pub last_usage: Usage,
 
     pub input_textarea: TextArea<'a>,
@@ -41,7 +44,7 @@ pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
 }
 
 impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
-    pub fn new(session: Arc<Mutex<SessionData>>, llm_client: LlmClient<P>, frame_rx: watch::Receiver<Option<Arc<Buffer>>>) -> Self {
+    pub fn new(session: Arc<Mutex<SessionData>>, llm_client: LlmClient<P>, frame_rx: watch::Receiver<Option<Arc<Buffer>>>, skill_registry: SkillRegistry) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut textarea = TextArea::default();
         textarea.set_block(
@@ -74,6 +77,7 @@ impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
             network_tx: tx,
             network_rx: rx,
             frame_rx: frame_rx,
+            skill_registry: skill_registry,
             last_usage: Usage { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
             chat_display: Vec::new(),
             scroll: 0,
