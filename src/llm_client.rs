@@ -1,6 +1,7 @@
 pub mod openai;
 pub mod provider;
 
+use crate::llm_client::openai::ReasoningEffort;
 use crate::message::Message;
 use crate::session::{SessionData, StreamEvent};
 use crate::tools::ToolRegistry;
@@ -25,6 +26,7 @@ impl<P: LlmProvider> LlmClient<P> {
         &self,
         session_arc: Arc<Mutex<SessionData>>,
         tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
+        reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             let messages = {
@@ -35,7 +37,7 @@ impl<P: LlmProvider> LlmClient<P> {
 
             let result = self
                 .provider
-                .stream_completion(&messages, &tools, tx.clone())
+                .stream_completion(&messages, &tools, tx.clone(), reasoning_effort)
                 .await?;
 
             {

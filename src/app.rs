@@ -2,7 +2,7 @@ use std::io::{self};
 use std::sync::Arc;
 
 use crate::api::Usage;
-use crate::events::{handle_stream_event, handle_user_event};
+use crate::events::{EventKind, handle_stream_event, handle_user_event};
 use crate::llm_client::LlmClient;
 use crate::llm_client::provider::LlmProvider;
 use crate::session::{SessionData, StreamEvent, Task};
@@ -38,6 +38,8 @@ pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
 
     pub input_textarea: TextArea<'a>,
     pub chat_display: Vec<Line<'static>>,
+    
+    pub last_event_kind: EventKind,
 
     pub scroll: u16,
     pub auto_scroll: bool,
@@ -62,7 +64,6 @@ impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
             }
         };
 
-
         Self {
             session: session,
             llm_client: Arc::new(llm_client),
@@ -80,6 +81,7 @@ impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
             skill_registry: skill_registry,
             last_usage: Usage { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
             chat_display: Vec::new(),
+            last_event_kind: EventKind::None,
             scroll: 0,
             auto_scroll: true,
         }

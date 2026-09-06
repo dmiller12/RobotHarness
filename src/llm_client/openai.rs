@@ -37,6 +37,15 @@ pub struct StreamOptions {
     pub include_usage: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Low,
+    Medium,
+    High,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct OpenAiRequest {
     pub model: String,
@@ -52,7 +61,7 @@ pub struct OpenAiRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,6 +74,7 @@ impl LlmProvider for OpenAiProvider {
         messages: &[Message],
         tools: &[Tool],
         tx: UnboundedSender<StreamEvent>,
+        reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<GenerationResult, Box<dyn std::error::Error>> {
         let request = OpenAiRequest {
             model: self.model.clone(),
@@ -74,7 +84,7 @@ impl LlmProvider for OpenAiProvider {
             frequency_penalty: Some(1.0),
             top_p: Some(0.95),
             stream: Some(true),
-            reasoning_effort: Some("high".to_string()),
+            reasoning_effort: reasoning_effort,
             tools: if tools.is_empty() {
                 None
             } else {

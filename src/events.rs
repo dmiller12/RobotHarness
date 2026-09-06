@@ -1,4 +1,5 @@
 use crate::api::Role;
+use crate::llm_client::openai::ReasoningEffort;
 use crate::llm_client::provider::AppProvider;
 use crate::message::Message;
 use crate::message::{Content, ContentBlock, ImageUrlPayload};
@@ -8,6 +9,15 @@ use crate::video::process_and_encode_frame;
 use crate::{app::App, session::StreamEvent};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventKind {
+    None,
+    Reasoning,
+    Content,
+    Tool,
+    Other,
+}
 
 pub fn handle_user_event<P: AppProvider>(app: &mut App<P>, event: Event) {
     match event {
@@ -138,8 +148,9 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                         name: None,
                     });
                 }
+                // TODO: Need to respect skill tools
                 let _ = client_clone
-                    .run_agent_loop(session_clone.clone(), tx_clone.clone())
+                    .run_agent_loop(session_clone.clone(), tx_clone.clone(), Some(ReasoningEffort::High))
                     .await;
                 if is_planner {
                     let eval_session = session_clone.clone();
@@ -200,7 +211,7 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                             }
 
                             let _ = eval_client
-                                .run_agent_loop(eval_session.clone(), eval_tx.clone())
+                                .run_agent_loop(eval_session.clone(), eval_tx.clone(), Some(ReasoningEffort::None))
                                 .await;
                         }
                     });
@@ -216,6 +227,21 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
 }
 
 pub fn handle_stream_event<P: AppProvider>(app: &mut App<P>, event: StreamEvent) {
+    let current_kind = match &event {
+        StreamEvent::Reasoning(_) => EventKind::Reasoning,
+        StreamEvent::Content(_) => EventKind::Content,
+        StreamEvent::ToolExecution { .. } => EventKind::Tool,
+        _ => EventKind::Other,
+    };
+
+    if current_kind != EventKind::Other && app.last_event_kind != current_kind {
+        commit_markdown_buffers(app);
+    }
+
+    if current_kind != EventKind::Other {
+        app.last_event_kind = current_kind;
+    }
+
     match event {
         StreamEvent::Reasoning(text) => {
             app.active_reasoning_buffer.push_str(&text);

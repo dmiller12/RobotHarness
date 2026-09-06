@@ -1,7 +1,7 @@
 use tokio::sync::mpsc::UnboundedSender;
 use async_trait::async_trait;
 
-use crate::{api::{Tool, ToolCall, Usage}, session::StreamEvent};
+use crate::{api::{Tool, ToolCall, Usage}, llm_client::openai::ReasoningEffort, session::StreamEvent};
 use crate::message::Message;
 
 
@@ -22,5 +22,6 @@ pub trait LlmProvider: Send + Sync {
         messages: &[Message],
         tools: &[Tool],
         tx: UnboundedSender<StreamEvent>,
+        reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<GenerationResult, Box<dyn std::error::Error>>;
 }
