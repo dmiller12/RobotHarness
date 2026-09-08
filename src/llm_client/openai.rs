@@ -80,8 +80,9 @@ impl LlmProvider for OpenAiProvider {
             model: self.model.clone(),
             messages: messages.to_vec(),
             temperature: Some(0.6),
+            // TODO, may need to pass these seperately
             presence_penalty: Some(0.0),
-            frequency_penalty: Some(1.0),
+            frequency_penalty: Some(0.0),
             top_p: Some(0.95),
             stream: Some(true),
             reasoning_effort: reasoning_effort,
@@ -99,7 +100,6 @@ impl LlmProvider for OpenAiProvider {
         let mut event_source = EventSource::new(request_builder)?;
 
         let mut final_content = String::new();
-        // Use a BTreeMap to accumulate parallel tool call chunks by their index
         let mut tool_calls_map: BTreeMap<usize, ToolCall> = BTreeMap::new();
 
         let mut final_usage: Option<Usage> = None;

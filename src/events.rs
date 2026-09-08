@@ -84,10 +84,8 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                     active_skill = Some(skill.clone());
                     actual_prompt = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
 
-                    // Planners inherently need visual context
                     if cmd == "planner" {
                         is_frame_req = true;
-                        // Prepend "Goal: " to match the planner.md prompt constraints
                         actual_prompt = format!("Goal: {}", actual_prompt);
                     }
                 }
@@ -150,7 +148,11 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                 }
                 // TODO: Need to respect skill tools
                 let _ = client_clone
-                    .run_agent_loop(session_clone.clone(), tx_clone.clone(), Some(ReasoningEffort::High))
+                    .run_agent_loop(
+                        session_clone.clone(),
+                        tx_clone.clone(),
+                        Some(ReasoningEffort::High),
+                    )
                     .await;
                 if is_planner {
                     let eval_session = session_clone.clone();
@@ -211,7 +213,11 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                             }
 
                             let _ = eval_client
-                                .run_agent_loop(eval_session.clone(), eval_tx.clone(), Some(ReasoningEffort::None))
+                                .run_agent_loop(
+                                    eval_session.clone(),
+                                    eval_tx.clone(),
+                                    Some(ReasoningEffort::None),
+                                )
                                 .await;
                         }
                     });
@@ -253,7 +259,13 @@ pub fn handle_stream_event<P: AppProvider>(app: &mut App<P>, event: StreamEvent)
             append_chat_display(
                 app,
                 Role::Tool,
-                format!("\n[System: Executing {} with {}]\n", name, args),
+                format!("\nExecuting {} with {}\n", name, args),
+            );
+        }
+        StreamEvent::ToolError { name, args, error } => {
+            append_error(
+                app,
+                &format!("\nFailed {} with {}, {}\n", name, args, error),
             );
         }
         StreamEvent::PlanUpdated(new_plan) => {

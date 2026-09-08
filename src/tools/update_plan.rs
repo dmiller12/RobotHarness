@@ -35,6 +35,10 @@ impl AgentTool for UpdatePlanTool {
         
         Ok("Plan updated successfully.".to_string())
     }
+
+    fn roundtrip_on_success(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

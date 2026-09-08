@@ -11,6 +11,7 @@ pub enum StreamEvent {
     Reasoning(String),
     Content(String),
     ToolExecution { name: String, args: String },
+    ToolError { name: String, args: String, error: String},
     Error(String),
     PlanUpdated(Vec<Task>),
     Usage(Usage),
@@ -50,45 +51,55 @@ impl SessionData {
         }
     }
     pub fn prune_intermediate_images(&mut self) {
-        let mut image_msg_indices = Vec::new();
+        // First, count total messages containing images
+        let total_images = self
+            .history
+            .iter()
+            .filter(|msg| {
+                if let Message::User {
+                    content: Content::Blocks(blocks),
+                    ..
+                } = msg
+                {
+                    blocks
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::ImageUrl { .. }))
+                } else {
+                    false
+                }
+            })
+            .count();
 
-        for (i, msg) in self.history.iter().enumerate() {
-            if let Message::User {
+        if total_images <= 1 {
+            return;
+        }
+
+        let mut image_count = 0;
+
+        // Retain modifies the vector in-place efficiently
+        self.history.retain(|msg| {
+            let is_image_msg = if let Message::User {
                 content: Content::Blocks(blocks),
                 ..
             } = msg
             {
-                if blocks
+                blocks
                     .iter()
                     .any(|b| matches!(b, ContentBlock::ImageUrl { .. }))
-                {
-                    image_msg_indices.push(i);
-                }
+            } else {
+                false
+            };
+
+            if is_image_msg {
+                // Keep only the first and last image messages
+                let keep = image_count == 0;
+                image_count += 1;
+                keep
+            } else {
+                // Keep all other message types
+                true
             }
-        }
-
-        if image_msg_indices.len() <= 2 {
-            return;
-        }
-
-        let middle_indices = &image_msg_indices[1..image_msg_indices.len() - 1];
-
-        for &idx in middle_indices {
-            // Remove `ref mut` and just bind `blocks`
-            if let Message::User {
-                content: Content::Blocks(blocks),
-                ..
-            } = &mut self.history[idx]
-            {
-                for block in blocks.iter_mut() {
-                    if matches!(block, ContentBlock::ImageUrl { .. }) {
-                        *block = ContentBlock::Text {
-                            text: "[Previous camera frame omitted to save memory]".to_string(),
-                        };
-                    }
-                }
-            }
-        }
+        });
     }
 
     fn get_session_file() -> Result<PathBuf, String> {

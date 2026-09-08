@@ -12,6 +12,9 @@ pub trait AgentTool: Send + Sync {
     fn description(&self) -> &'static str;
     fn parameters(&self) -> serde_json::Value;
     async fn execute(&self, args: &str) -> Result<String, String>;
+    fn roundtrip_on_success(&self) -> bool {
+        true
+    }
 
     fn as_api_tool(&self) -> Tool {
         let mut params = self.parameters();
@@ -76,6 +79,10 @@ impl ToolRegistry {
 
     pub fn register(&mut self, tool: Box<dyn AgentTool>) {
         self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    pub fn get_tool(&self, name: &str) -> Option<&dyn AgentTool> {
+        self.tools.get(name).map(|t| t.as_ref())
     }
 
     pub fn get_api_tools(&self) -> Vec<Tool> {
