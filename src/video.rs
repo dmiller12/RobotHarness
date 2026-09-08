@@ -72,11 +72,14 @@ pub fn probe_camera_hardware() {
     }
 }
 
-pub fn run_gui(camera_rx: watch::Receiver<Option<Arc<Buffer>>>) {
-    let mut window = Window::new("Agent Vision Feed", 1280, 720, WindowOptions::default())
+pub fn run_gui(camera_rx: watch::Receiver<Option<Arc<nokhwa::Buffer>>>) {
+    const WIDTH: usize = 512;
+    const HEIGHT: usize = 512;
+
+    let mut window = Window::new("Agent Vision Feed", WIDTH, HEIGHT, WindowOptions::default())
         .expect("Failed to open window");
 
-    let mut buffer_u32: Vec<u32> = vec![0; 1280 * 720];
+    let mut buffer_u32: Vec<u32> = vec![0; WIDTH * HEIGHT];
 
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
         let frame_arc = {
@@ -85,14 +88,23 @@ pub fn run_gui(camera_rx: watch::Receiver<Option<Arc<Buffer>>>) {
         };
 
         if let Some(frame) = frame_arc {
-            if let Ok(decoded_rgb) = frame.decode_image::<RgbFormat>() {
-                // Convert 8-bit RGB to 32-bit ARGB
-                for (i, pixel) in decoded_rgb.chunks_exact(3).enumerate() {
+            if let Ok(decoded_rgb) = frame.decode_image::<nokhwa::pixel_format::RgbFormat>() {
+                // Replicate the exact pipeline used for the LLM
+                let img = image::DynamicImage::ImageRgb8(decoded_rgb);
+                let resized = img.resize_exact(
+                    WIDTH as u32,
+                    HEIGHT as u32,
+                    image::imageops::FilterType::Nearest,
+                );
+
+                let rgb_bytes = resized.into_rgb8();
+
+                // Convert 8-bit RGB to 32-bit ARGB for minifb
+                for (i, pixel) in rgb_bytes.chunks_exact(3).enumerate() {
                     if i < buffer_u32.len() {
                         let r = pixel[0] as u32;
                         let g = pixel[1] as u32;
                         let b = pixel[2] as u32;
-                        // Pack into ARGB format (A is top 8 bits, R, G, B)
                         buffer_u32[i] = (255 << 24) | (r << 16) | (g << 8) | b;
                     }
                 }
@@ -100,7 +112,7 @@ pub fn run_gui(camera_rx: watch::Receiver<Option<Arc<Buffer>>>) {
         }
 
         window
-            .update_with_buffer(&buffer_u32, 1280, 720)
+            .update_with_buffer(&buffer_u32, WIDTH, HEIGHT)
             .expect("Buffer update failed");
     }
 }
