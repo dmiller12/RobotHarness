@@ -44,7 +44,7 @@ fn main() -> io::Result<()> {
             let session = Arc::new(Mutex::new(session_data));
 
             let mut tool_registry = ToolRegistry::new();
-            tool_registry.register(Box::new(ReadFileTool));
+            // tool_registry.register(Box::new(ReadFileTool));
             tool_registry.register(Box::new(UpdatePlanTool {
                 session: session.clone(),
             }));

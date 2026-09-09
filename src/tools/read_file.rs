@@ -2,8 +2,9 @@ use std::fs;
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
+use tokio;
 
-use crate::tools::AgentTool;
+use crate::{session::StreamEvent, tools::AgentTool};
 
 #[derive(Deserialize, JsonSchema)]
 struct ReadFileArgs {
@@ -25,7 +26,7 @@ impl AgentTool for ReadFileTool {
         serde_json::to_value(schema_for!(ReadFileArgs)).unwrap()
     }
 
-    async fn execute(&self, args: &str) -> Result<String, String> {
+    async fn execute(&self, args: &str, tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>) -> Result<String, String> {
         let parsed: ReadFileArgs = serde_json::from_str(args)
             .map_err(|e| format!("Invalid JSON arguments: {}", e))?;
             

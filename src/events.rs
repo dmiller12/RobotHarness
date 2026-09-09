@@ -3,10 +3,12 @@ use crate::llm_client::openai::ReasoningEffort;
 use crate::llm_client::provider::AppProvider;
 use crate::message::Message;
 use crate::message::{Content, ContentBlock, ImageUrlPayload};
-use crate::session::TaskStatus;
+use crate::session::{SessionData, TaskStatus};
 use crate::ui::{append_chat_display, append_error, commit_markdown_buffers, reset_textarea};
 use crate::video::process_and_encode_frame;
 use crate::{app::App, session::StreamEvent};
+
+use std::sync::Arc;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 
@@ -105,6 +107,7 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
             let client_clone = app.llm_client.clone();
             let session_clone = app.session.clone();
             let frame_rx_clone = app.frame_rx.clone();
+            let mut initial_frame_b64 = String::new();
 
             tokio::spawn(async move {
                 let is_planner = active_skill
@@ -122,11 +125,11 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                     };
 
                     if let Some(frame) = frame_arc {
-                        let base64_image = process_and_encode_frame(frame).await;
+                        initial_frame_b64 = process_and_encode_frame(frame).await;
 
                         message_blocks.push(ContentBlock::ImageUrl {
                             image_url: ImageUrlPayload {
-                                url: format!("data:image/jpeg;base64,{}", base64_image),
+                                url: format!("data:image/jpeg;base64,{}", initial_frame_b64),
                                 detail: None,
                             },
                         });
@@ -155,23 +158,49 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                     )
                     .await;
                 if is_planner {
-                    let eval_session = session_clone.clone();
+                    let initial_plan = { session_clone.lock().await.plan.clone() };
+
+                    let eval_prompt = evaluator_skill
+                        .as_ref()
+                        .map(|s| s.instructions.clone())
+                        .unwrap_or_else(|| {
+                            "Evaluate the current scene against the plan.".to_string()
+                        });
+
+                    let mut isolated_eval_session = SessionData::new(&eval_prompt);
+                    isolated_eval_session.plan = initial_plan;
+                    if !initial_frame_b64.is_empty() {
+                        isolated_eval_session.history.push(Message::User {
+                            content: Content::Blocks(vec![
+                                ContentBlock::Text {
+                                    text: "Inital Image".to_string(),
+                                },
+                                ContentBlock::ImageUrl {
+                                    image_url: ImageUrlPayload {
+                                        url: format!(
+                                            "data:image/jpeg;base64,{}",
+                                            initial_frame_b64
+                                        ),
+                                        detail: None,
+                                    },
+                                },
+                            ]),
+                            name: None,
+                        });
+                    }
+
+                    let eval_session_arc = Arc::new(tokio::sync::Mutex::new(isolated_eval_session));
                     let eval_client = client_clone.clone();
                     let eval_rx = frame_rx_clone.clone();
                     let eval_tx = tx_clone.clone();
 
                     tokio::spawn(async move {
                         loop {
+                            let plan = { session_clone.lock().await.plan.clone() };
+                            if plan.is_empty()
+                                || plan.iter().all(|t| t.status == TaskStatus::Completed)
                             {
-                                let session = eval_session.lock().await;
-                                if session.plan.is_empty()
-                                    || session
-                                        .plan
-                                        .iter()
-                                        .all(|t| t.status == TaskStatus::Completed)
-                                {
-                                    break;
-                                }
+                                break;
                             }
 
                             let latest_frame_b64 = {
@@ -185,19 +214,19 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                             };
 
                             {
-                                let mut session = eval_session.lock().await;
-                                session.prune_intermediate_images();
-
-                                let eval_prompt = evaluator_skill
-                                    .as_ref()
-                                    .map(|s| s.instructions.clone())
-                                    .unwrap_or_else(|| {
-                                        "Evaluate the current scene against the plan.".to_string()
-                                    });
+                                let mut session = eval_session_arc.lock().await;
+                                let current_plan_text = serde_json::to_string(&plan)
+                                    .unwrap_or_else(|_| "[]".to_string());
+                                session.history.truncate(2);
 
                                 session.history.push(Message::User {
                                     content: Content::Blocks(vec![
-                                        ContentBlock::Text { text: eval_prompt },
+                                        ContentBlock::Text {
+                                            text: format!("Current plan: {}", current_plan_text),
+                                        },
+                                        ContentBlock::Text {
+                                            text: "Current Image".to_string(),
+                                        },
                                         ContentBlock::ImageUrl {
                                             image_url: ImageUrlPayload {
                                                 url: format!(
@@ -214,7 +243,7 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
 
                             let _ = eval_client
                                 .run_agent_loop(
-                                    eval_session.clone(),
+                                    eval_session_arc.clone(),
                                     eval_tx.clone(),
                                     Some(ReasoningEffort::None),
                                 )

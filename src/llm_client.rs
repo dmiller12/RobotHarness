@@ -77,7 +77,11 @@ impl<P: LlmProvider> LlmClient<P> {
                     .get_tool(&name)
                     .ok_or_else(|| format!("Tool '{}' not found in registry", name))?;
 
-                let tool_output = match self.tool_registry.execute_tool(&name, &args).await {
+                let tool_output = match self
+                    .tool_registry
+                    .execute_tool(&name, &args, tx.clone())
+                    .await
+                {
                     Ok(success_msg) => {
                         if tool.roundtrip_on_success() {
                             requires_roundtrip = true;
@@ -85,24 +89,15 @@ impl<P: LlmProvider> LlmClient<P> {
                         success_msg
                     }
                     Err(error_msg) => {
-
                         let _ = tx.send(StreamEvent::ToolError {
                             name: name.clone(),
                             args: args.clone(),
-                            error: error_msg.clone()
+                            error: error_msg.clone(),
                         });
                         requires_roundtrip = true;
                         error_msg
                     } // Feed errors back so the LLM can self-correct
                 };
-
-                if name == "update_plan" {
-                    let updated_plan = {
-                        let session = session_arc.lock().await;
-                        session.plan.clone()
-                    };
-                    let _ = tx.send(StreamEvent::PlanUpdated(updated_plan));
-                }
 
                 let mut session = session_arc.lock().await;
                 session.history.push(Message::Tool {

@@ -3,15 +3,23 @@ pub mod update_plan;
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use tokio;
 
-use crate::api::{FunctionDeclaration, Tool};
+use crate::{
+    api::{FunctionDeclaration, Tool},
+    session::StreamEvent,
+};
 
 #[async_trait]
 pub trait AgentTool: Send + Sync {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
     fn parameters(&self) -> serde_json::Value;
-    async fn execute(&self, args: &str) -> Result<String, String>;
+    async fn execute(
+        &self,
+        args: &str,
+        tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
+    ) -> Result<String, String>;
     fn roundtrip_on_success(&self) -> bool {
         true
     }
@@ -89,9 +97,14 @@ impl ToolRegistry {
         self.tools.values().map(|t| t.as_api_tool()).collect()
     }
 
-    pub async fn execute_tool(&self, name: &str, args: &str) -> Result<String, String> {
+    pub async fn execute_tool(
+        &self,
+        name: &str,
+        args: &str,
+        tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
+    ) -> Result<String, String> {
         if let Some(tool) = self.tools.get(name) {
-            tool.execute(args).await
+            tool.execute(args, tx).await
         } else {
             Err(format!("Tool '{}' not found in registry", name))
         }
