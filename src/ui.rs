@@ -62,15 +62,22 @@ pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
         }
     }
 
-    let usage_text = format!(
-        " In: {} | Out: {} | Total: {} ",
-        app.last_usage.prompt_tokens, app.last_usage.completion_tokens, app.last_usage.total_tokens
+    let metrics_part = app.last_metrics.as_ref().map_or(String::new(), |m| {
+        format!(" | TTFT: {}ms | {:.1} TPS", m.ttft_ms, m.tps)
+    });
+    let footer_text = format!(
+        " In: {} | Out: {} | Total: {}{} ",
+        app.last_usage.prompt_tokens,
+        app.last_usage.completion_tokens,
+        app.last_usage.total_tokens,
+        metrics_part
     );
+
     let history_block = Block::bordered()
         .title(Line::from(" Custom Harness ").centered())
         .title_bottom(
             Line::from(Span::styled(
-                usage_text,
+                footer_text,
                 Style::default().fg(Color::DarkGray),
             ))
             .right_aligned(),

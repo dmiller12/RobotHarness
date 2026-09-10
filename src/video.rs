@@ -2,9 +2,12 @@ use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{
     CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution,
 };
+
+use nokhwa::utils::ApiBackend;
 use nokhwa::{Buffer, Camera, query};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 use image;
@@ -13,16 +16,22 @@ use base64::prelude::*;
 
 use minifb::{Window, WindowOptions};
 
-pub fn start_camera_thread() -> watch::Receiver<Option<Arc<Buffer>>> {
+#[derive(Clone)]
+pub struct CameraFrame {
+    pub buffer: Arc<Buffer>,
+    pub captured_at: Instant,
+}
+
+pub fn start_camera_thread() -> watch::Receiver<Option<CameraFrame>> {
     let (tx, rx) = watch::channel(None);
 
     thread::spawn(move || {
         let cameras = query(ApiBackend::Auto).expect("Failed to query cameras");
 
-        // Match against the actual system string "c920"
         let target_camera_info = cameras
             .into_iter()
             .find(|info| info.human_name().to_lowercase().contains("c920"))
+            // .find(|info| info.human_name().to_lowercase().contains("facetime"))
             .expect("C920 camera not found on USB bus");
 
         // let target_format = CameraFormat::new(Resolution::new(1280, 720), FrameFormat::YUYV, 30);
@@ -43,17 +52,29 @@ pub fn start_camera_thread() -> watch::Receiver<Option<Arc<Buffer>>> {
             eprintln!("Failed to open stream for camera {}: {}", index, e);
             return;
         }
-
+        let mut clock_sync: Option<(Duration, Instant)> = None;
         loop {
             match camera.frame() {
                 Ok(frame) => {
-                    if tx.send(Some(Arc::new(frame))).is_err() {
+                    let hw_timestamp = frame.capture_timestamp().unwrap_or_default();
+                    if clock_sync.is_none() {
+                        clock_sync = Some((hw_timestamp, Instant::now()));
+                    }
+
+                    let (base_hw_time, base_instant) = clock_sync.unwrap();
+                    let hardware_elapsed = hw_timestamp.saturating_sub(base_hw_time);
+                    let absolute_capture_instant = base_instant + hardware_elapsed;
+                    let timestamped_frame = CameraFrame {
+                        buffer: Arc::new(frame),
+                        captured_at: absolute_capture_instant,
+                    };
+
+                    if tx.send(Some(timestamped_frame)).is_err() {
                         break;
                     }
                 }
                 Err(e) => {
                     eprintln!("Error capturing frame: {}", e);
-                    // Decide if you want to break or continue polling here
                 }
             }
         }
@@ -61,8 +82,6 @@ pub fn start_camera_thread() -> watch::Receiver<Option<Arc<Buffer>>> {
 
     rx
 }
-
-use nokhwa::utils::ApiBackend;
 
 pub fn probe_camera_hardware() {
     let cameras = nokhwa::query(ApiBackend::Auto).unwrap_or_else(|e| {
@@ -81,7 +100,7 @@ pub fn probe_camera_hardware() {
     }
 }
 
-pub fn run_gui(camera_rx: watch::Receiver<Option<Arc<nokhwa::Buffer>>>) {
+pub fn run_gui(camera_rx: watch::Receiver<Option<CameraFrame>>) {
     const WIDTH: usize = 512;
     const HEIGHT: usize = 512;
 
@@ -96,7 +115,8 @@ pub fn run_gui(camera_rx: watch::Receiver<Option<Arc<nokhwa::Buffer>>>) {
             rx_lock.clone()
         };
 
-        if let Some(frame) = frame_arc {
+        if let Some(timestamped_frame) = frame_arc {
+            let frame = timestamped_frame.buffer;
             if let Ok(decoded_rgb) = frame.decode_image::<nokhwa::pixel_format::RgbFormat>() {
                 // Replicate the exact pipeline used for the LLM
                 let img = image::DynamicImage::ImageRgb8(decoded_rgb);
@@ -132,11 +152,7 @@ pub async fn process_and_encode_frame(frame: Arc<nokhwa::Buffer>) -> String {
             .expect("Failed to decode RGB");
         let img = image::DynamicImage::ImageRgb8(decoded);
 
-                let resized = img.resize_to_fill(
-                    512,
-                    512,
-                    image::imageops::FilterType::Nearest,
-                );
+        let resized = img.resize_to_fill(512, 512, image::imageops::FilterType::Nearest);
 
         let mut jpeg_bytes: Vec<u8> = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut jpeg_bytes);

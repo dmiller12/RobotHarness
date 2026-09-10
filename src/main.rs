@@ -4,10 +4,10 @@ mod events;
 mod llm_client;
 mod message;
 mod session;
+mod skill;
 mod tools;
 mod ui;
 mod video;
-mod skill;
 
 use std::io::{self};
 
@@ -23,9 +23,10 @@ use crate::video::run_gui;
 use crate::video::start_camera_thread;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
+use std::env;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::thread;
+use tokio::sync::Mutex;
 
 fn main() -> io::Result<()> {
     let camera_rx = start_camera_thread();
@@ -37,18 +38,25 @@ fn main() -> io::Result<()> {
             let provider = OpenAiProvider::new(
                 "qwen3.5:4b-mlx",
                 "http://localhost:11434/v1/chat/completions",
+                None,
             );
+
+            // let api_key: Option<String> = env::var("AVANTE_GEMINI_API_KEY").ok();
+            // let provider = OpenAiProvider::new(
+            //     "gemini-3.8-flash",
+            //     "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            //     api_key,
+            // );
 
             // let session_data = SessionData::load().expect("Failed to load session state");
             let session_data = SessionData::new("You are are a helpful assistant.");
             let session = Arc::new(Mutex::new(session_data));
 
             let mut tool_registry = ToolRegistry::new();
-            // tool_registry.register(Box::new(ReadFileTool));
+            tool_registry.register(Box::new(ReadFileTool));
             tool_registry.register(Box::new(UpdatePlanTool {
                 session: session.clone(),
             }));
-
 
             let client = LlmClient::new(provider, tool_registry);
 

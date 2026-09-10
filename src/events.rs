@@ -124,7 +124,8 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                         rx_lock.clone()
                     };
 
-                    if let Some(frame) = frame_arc {
+                    if let Some(timestamped_frame) = frame_arc {
+                        let frame = timestamped_frame.buffer;
                         initial_frame_b64 = process_and_encode_frame(frame).await;
 
                         message_blocks.push(ContentBlock::ImageUrl {
@@ -203,10 +204,13 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                                 break;
                             }
 
-                            let latest_frame_b64 = {
+                            let (latest_frame_b64, capture_instant) = {
                                 let frame_arc = { eval_rx.borrow().clone() };
-                                if let Some(frame) = frame_arc {
-                                    process_and_encode_frame(frame).await
+                                if let Some(timestamped_frame) = frame_arc {
+                                    let instant = timestamped_frame.captured_at;
+                                    let b64 =
+                                        process_and_encode_frame(timestamped_frame.buffer).await;
+                                    (b64, instant)
                                 } else {
                                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                                     continue;
@@ -248,6 +252,8 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
                                     Some(ReasoningEffort::None),
                                 )
                                 .await;
+                            let total_latency = capture_instant.elapsed();
+                            let _ = eval_tx.send(StreamEvent::Latency(total_latency));
                         }
                     });
                 }
@@ -302,6 +308,16 @@ pub fn handle_stream_event<P: AppProvider>(app: &mut App<P>, event: StreamEvent)
         }
         StreamEvent::Usage(usage) => {
             app.last_usage = usage;
+        }
+        StreamEvent::Metrics(metrics) => {
+            app.last_metrics = Some(metrics);
+        }
+        StreamEvent::Latency(duration) => {
+            append_chat_display(
+                app,
+                Role::Assistant,
+                format!("End-to-end latency: {}ms", duration.as_millis()),
+            );
         }
         StreamEvent::Error(err) => {
             append_error(app, &err);

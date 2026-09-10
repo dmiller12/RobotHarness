@@ -1,7 +1,8 @@
 use schemars::JsonSchema;
 
 use crate::api::Usage;
-use crate::message::{Content, ContentBlock, Message};
+use crate::llm_client::provider::GenerationMetrics;
+use crate::message::Message;
 
 use std::fs;
 use std::path::PathBuf;
@@ -15,6 +16,8 @@ pub enum StreamEvent {
     Error(String),
     PlanUpdated(Vec<Task>),
     Usage(Usage),
+    Latency(std::time::Duration),
+    Metrics(GenerationMetrics),
     Done,
 }
 
@@ -49,57 +52,6 @@ impl SessionData {
                 name: None,
             }],
         }
-    }
-    pub fn prune_intermediate_images(&mut self) {
-        // First, count total messages containing images
-        let total_images = self
-            .history
-            .iter()
-            .filter(|msg| {
-                if let Message::User {
-                    content: Content::Blocks(blocks),
-                    ..
-                } = msg
-                {
-                    blocks
-                        .iter()
-                        .any(|b| matches!(b, ContentBlock::ImageUrl { .. }))
-                } else {
-                    false
-                }
-            })
-            .count();
-
-        if total_images <= 1 {
-            return;
-        }
-
-        let mut image_count = 0;
-
-        // Retain modifies the vector in-place efficiently
-        self.history.retain(|msg| {
-            let is_image_msg = if let Message::User {
-                content: Content::Blocks(blocks),
-                ..
-            } = msg
-            {
-                blocks
-                    .iter()
-                    .any(|b| matches!(b, ContentBlock::ImageUrl { .. }))
-            } else {
-                false
-            };
-
-            if is_image_msg {
-                // Keep only the first and last image messages
-                let keep = image_count == 0;
-                image_count += 1;
-                keep
-            } else {
-                // Keep all other message types
-                true
-            }
-        });
     }
 
     fn get_session_file() -> Result<PathBuf, String> {

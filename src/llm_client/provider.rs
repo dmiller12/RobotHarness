@@ -15,6 +15,13 @@ pub struct GenerationResult {
     pub usage: Option<Usage>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct GenerationMetrics {
+    pub ttft_ms: u128,
+    pub generation_ms: f64,
+    pub tps: f64,
+}
+
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn stream_completion(
