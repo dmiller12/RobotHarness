@@ -58,7 +58,6 @@ impl<P: LlmProvider> LlmClient<P> {
             }
 
             if result.tool_calls.is_empty() {
-                let _ = tx.send(StreamEvent::Done);
                 break;
             }
             let mut requires_roundtrip = false;
@@ -111,6 +110,7 @@ impl<P: LlmProvider> LlmClient<P> {
             }
         }
 
+        let _ = tx.send(StreamEvent::Done);
         Ok(())
     }
 }
