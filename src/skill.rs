@@ -47,9 +47,7 @@ impl SkillRegistry {
             .parse(file_contents)
             .expect("Failed to parse markdown");
 
-        let metadata: SkillMetadata = parsed
-            .data
-            .expect("Missing frontmatter");
+        let metadata: SkillMetadata = parsed.data.expect("Missing frontmatter");
 
         Skill {
             metadata,

@@ -18,6 +18,7 @@ pub enum StreamEvent {
     Usage(Usage),
     Latency(std::time::Duration),
     Metrics(GenerationMetrics),
+    EvaluateStart,
     Done,
 }
 

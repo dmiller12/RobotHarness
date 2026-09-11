@@ -4,8 +4,8 @@ use reqwest::Client;
 use reqwest_eventsource::{Event, EventSource};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use tokio::sync::mpsc::UnboundedSender;
 use std::time::Instant;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::api::Usage;
 use crate::llm_client::provider::GenerationMetrics;
@@ -124,71 +124,82 @@ impl LlmProvider for OpenAiProvider {
                         break;
                     }
 
-                    if let Ok(stream_res) = serde_json::from_str::<StreamResponse>(&message.data) {
-                        if let Some(choice) = stream_res.choices.into_iter().next() {
-                            if let Some(reasoning) = choice.delta.reasoning {
-                                if !reasoning.is_empty() {
+                    match serde_json::from_str::<StreamResponse>(&message.data) {
+                        Ok(stream_res) => {
+                            if let Some(choice) = stream_res.choices.into_iter().next() {
+                                if let Some(reasoning) = choice.delta.reasoning {
+                                    if !reasoning.is_empty() {
+                                        if first_token_time.is_none() {
+                                            first_token_time = Some(Instant::now());
+                                        }
+                                        let _ = tx.send(StreamEvent::Reasoning(reasoning));
+                                    }
+                                }
+
+                                if let Some(content) = choice.delta.content {
+                                    if !content.is_empty() {
+                                        if first_token_time.is_none() {
+                                            first_token_time = Some(Instant::now());
+                                        }
+                                        final_content.push_str(&content);
+                                        let _ = tx.send(StreamEvent::Content(content.clone()));
+                                    }
+                                }
+
+                                if let Some(tc_deltas) = choice.delta.tool_calls {
                                     if first_token_time.is_none() {
                                         first_token_time = Some(Instant::now());
                                     }
-                                    let _ = tx.send(StreamEvent::Reasoning(reasoning));
-                                }
-                            }
 
-                            if let Some(content) = choice.delta.content {
-                                if !content.is_empty() {
-                                    if first_token_time.is_none() {
-                                        first_token_time = Some(Instant::now());
-                                    }
-                                    final_content.push_str(&content);
-                                    let _ = tx.send(StreamEvent::Content(content.clone()));
-                                }
-                            }
+                                    for tc_delta in tc_deltas {
+                                        let idx = tc_delta.index.unwrap_or(0);
+                                        let idx_usize = idx as usize;
+                                        let entry =
+                                            tool_calls_map.entry(idx_usize).or_insert_with(|| {
+                                                ToolCall {
+                                                    index: Some(idx),
+                                                    id: tc_delta.id.clone(),
+                                                    r#type: Some("function".to_string()),
+                                                    function: ToolCallFunction {
+                                                        name: tc_delta.function.name.clone(),
+                                                        arguments: Some(String::new()),
+                                                    },
+                                                }
+                                            });
 
-                            if let Some(tc_deltas) = choice.delta.tool_calls {
-                                if first_token_time.is_none() {
-                                    first_token_time = Some(Instant::now());
-                                }
-
-                                for tc_delta in tc_deltas {
-                                    let idx = tc_delta.index;
-                                    let idx_usize = idx as usize;
-                                    let entry =
-                                        tool_calls_map.entry(idx_usize).or_insert_with(|| {
-                                            ToolCall {
-                                                index: idx,
-                                                id: tc_delta.id.clone(),
-                                                r#type: Some("function".to_string()),
-                                                function: ToolCallFunction {
-                                                    name: tc_delta.function.name.clone(),
-                                                    arguments: Some(String::new()),
-                                                },
+                                        if let Some(args_chunk) = tc_delta.function.arguments {
+                                            if let Some(existing_args) =
+                                                &mut entry.function.arguments
+                                            {
+                                                existing_args.push_str(&args_chunk);
                                             }
-                                        });
-
-                                    if let Some(args_chunk) = tc_delta.function.arguments {
-                                        if let Some(existing_args) = &mut entry.function.arguments {
-                                            existing_args.push_str(&args_chunk);
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        if let Some(usage) = stream_res.usage {
-                            let mut metrics = GenerationMetrics::default();
-                            if let Some(ft_time) = first_token_time {
-                                metrics.ttft_ms = ft_time.duration_since(request_start).as_millis();
-                                let gen_duration = ft_time.elapsed().as_secs_f64();
-                                metrics.generation_ms = gen_duration * 1000.0;
+                            if let Some(usage) = stream_res.usage {
+                                let mut metrics = GenerationMetrics::default();
+                                if let Some(ft_time) = first_token_time {
+                                    metrics.ttft_ms =
+                                        ft_time.duration_since(request_start).as_millis();
+                                    let gen_duration = ft_time.elapsed().as_secs_f64();
+                                    metrics.generation_ms = gen_duration * 1000.0;
 
-                                if gen_duration > 0.0 {
-                                    metrics.tps = usage.completion_tokens as f64 / gen_duration;
+                                    if gen_duration > 0.0 {
+                                        metrics.tps = usage.completion_tokens as f64 / gen_duration;
+                                    }
                                 }
+                                final_usage = Some(usage);
+                                let _ = tx.send(StreamEvent::Metrics(metrics));
+                                let _ = tx.send(StreamEvent::Usage(usage.clone()));
                             }
-                            final_usage = Some(usage);
-                            let _ = tx.send(StreamEvent::Metrics(metrics));
-                            let _ = tx.send(StreamEvent::Usage(usage.clone()));
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Deserialization Error on chunk: {} | Data: {}",
+                                e, message.data
+                            );
                         }
                     }
                 }

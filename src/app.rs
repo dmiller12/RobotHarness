@@ -37,6 +37,7 @@ pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
 
     pub last_usage: Usage,
     pub last_metrics: Option<GenerationMetrics>,
+    pub last_latency: Option<std::time::Duration>,
 
     pub input_textarea: TextArea<'a>,
     pub chat_display: Vec<Line<'static>>,
@@ -88,6 +89,7 @@ impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
             skill_registry: skill_registry,
             last_usage: Usage::default(),
             last_metrics: None,
+            last_latency: None,
             chat_display: Vec::new(),
             last_event_kind: EventKind::None,
             scroll: 0,

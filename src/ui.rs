@@ -62,15 +62,21 @@ pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
         }
     }
 
+
+    let latency_part = app.last_latency.as_ref().map_or(String::new(), |m| {
+        format!(" | End-to-end: {}ms", m.as_millis())
+    });
+
     let metrics_part = app.last_metrics.as_ref().map_or(String::new(), |m| {
         format!(" | TTFT: {}ms | {:.1} TPS", m.ttft_ms, m.tps)
     });
     let footer_text = format!(
-        " In: {} | Out: {} | Total: {}{} ",
+        " In: {} | Out: {} | Total: {}{}{} ",
         app.last_usage.prompt_tokens,
         app.last_usage.completion_tokens,
         app.last_usage.total_tokens,
-        metrics_part
+        latency_part,
+        metrics_part,
     );
 
     let history_block = Block::bordered()
@@ -128,6 +134,7 @@ pub fn append_chat_display<P: AppProvider>(app: &mut App<P>, role: Role, message
         Role::Assistant => ("Assistant: ", Color::Green),
         Role::System => ("System: ", Color::Yellow),
         Role::Tool => ("Tool: ", Color::Cyan),
+        Role::Info => ("Info: ", Color::Gray),
     };
 
     let mut spans = vec![Span::styled(prefix, Style::default().fg(color).bold())];

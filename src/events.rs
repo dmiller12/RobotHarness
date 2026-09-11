@@ -197,12 +197,14 @@ fn handle_key_event<P: AppProvider>(app: &mut App<P>, key_event: KeyEvent) {
 
                     tokio::spawn(async move {
                         loop {
+
                             let plan = { session_clone.lock().await.plan.clone() };
                             if plan.is_empty()
                                 || plan.iter().all(|t| t.status == TaskStatus::Completed)
                             {
                                 break;
                             }
+                            let _ = eval_tx.send(StreamEvent::EvaluateStart);
 
                             let (latest_frame_b64, capture_instant) = {
                                 let frame_arc = { eval_rx.borrow().clone() };
@@ -306,6 +308,13 @@ pub fn handle_stream_event<P: AppProvider>(app: &mut App<P>, event: StreamEvent)
         StreamEvent::PlanUpdated(new_plan) => {
             app.plan = new_plan;
         }
+        StreamEvent::EvaluateStart => {
+            append_chat_display(
+                app,
+                Role::Info,
+                format!("\nEvaluating Plan Progress"),
+            );
+        }
         StreamEvent::Usage(usage) => {
             app.last_usage = usage;
         }
@@ -313,11 +322,7 @@ pub fn handle_stream_event<P: AppProvider>(app: &mut App<P>, event: StreamEvent)
             app.last_metrics = Some(metrics);
         }
         StreamEvent::Latency(duration) => {
-            append_chat_display(
-                app,
-                Role::Assistant,
-                format!("End-to-end latency: {}ms", duration.as_millis()),
-            );
+            app.last_latency = Some(duration);
         }
         StreamEvent::Error(err) => {
             append_error(app, &err);
