@@ -35,7 +35,7 @@ pub fn start_camera_thread() -> watch::Receiver<Option<CameraFrame>> {
             .expect("C920 camera not found on USB bus");
 
         // let target_format = CameraFormat::new(Resolution::new(1280, 720), FrameFormat::YUYV, 30);
-        let target_format = CameraFormat::new(Resolution::new(1280, 720), FrameFormat::YUYV, 5);
+        let target_format = CameraFormat::new(Resolution::new(640, 480), FrameFormat::YUYV, 30);
         let index = target_camera_info.index();
         let requested =
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::Exact(target_format));
@@ -101,8 +101,8 @@ pub fn probe_camera_hardware() {
 }
 
 pub fn run_gui(camera_rx: watch::Receiver<Option<CameraFrame>>) {
-    const WIDTH: usize = 512;
-    const HEIGHT: usize = 512;
+    const WIDTH: usize = 640;
+    const HEIGHT: usize = 480;
 
     let mut window = Window::new("Agent Vision Feed", WIDTH, HEIGHT, WindowOptions::default())
         .expect("Failed to open window");
@@ -152,7 +152,7 @@ pub async fn process_and_encode_frame(frame: Arc<nokhwa::Buffer>) -> String {
             .expect("Failed to decode RGB");
         let img = image::DynamicImage::ImageRgb8(decoded);
 
-        let resized = img.resize_to_fill(512, 512, image::imageops::FilterType::Nearest);
+        let resized = img.resize_to_fill(640, 480, image::imageops::FilterType::Nearest);
 
         let mut jpeg_bytes: Vec<u8> = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut jpeg_bytes);
