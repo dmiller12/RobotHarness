@@ -43,7 +43,7 @@ fn main() -> io::Result<()> {
 
             // let api_key: Option<String> = env::var("AVANTE_GEMINI_API_KEY").ok();
             // let provider = OpenAiProvider::new(
-            //     "gemini-3.8-flash",
+            //     "gemini-3.1-flash-lite",
             //     "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             //     api_key,
             // );
