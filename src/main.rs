@@ -17,8 +17,9 @@ use crate::llm_client::openai::OpenAiProvider;
 use crate::session::SessionData;
 use crate::skill::SkillRegistry;
 use crate::tools::ToolRegistry;
+use crate::tools::create_plan::CreatePlanTool;
+use crate::tools::create_plan::UpdateTaskStatusTool;
 use crate::tools::read_file::ReadFileTool;
-use crate::tools::update_plan::UpdatePlanTool;
 use crate::video::run_gui;
 use crate::video::start_camera_thread;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
@@ -54,7 +55,11 @@ fn main() -> io::Result<()> {
 
             let mut tool_registry = ToolRegistry::new();
             tool_registry.register(Box::new(ReadFileTool));
-            tool_registry.register(Box::new(UpdatePlanTool {
+            tool_registry.register(Box::new(CreatePlanTool {
+                session: session.clone(),
+            }));
+
+            tool_registry.register(Box::new(UpdateTaskStatusTool {
                 session: session.clone(),
             }));
 

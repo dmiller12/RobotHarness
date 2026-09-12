@@ -67,7 +67,7 @@ mod tests {
         let valid_markdown = r#"---
 name: test_skill
 description: A mock skill for testing
-tools: ["update_plan"]
+tools: ["create_plan"]
 ---
 # Test Header
 This is the instruction body."#;
@@ -76,7 +76,7 @@ This is the instruction body."#;
 
         assert_eq!(skill.metadata.name, "test_skill");
         assert_eq!(skill.metadata.description, "A mock skill for testing");
-        assert_eq!(skill.metadata.tools, vec!["update_plan"]);
+        assert_eq!(skill.metadata.tools, vec!["create_plan"]);
         assert_eq!(
             skill.instructions.trim(),
             "# Test Header\nThis is the instruction body."

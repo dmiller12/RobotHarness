@@ -32,6 +32,7 @@ pub enum TaskStatus {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct Task {
+    pub id: String,
     /// A clear, concise summary of the task to be performed.
     pub description: String,
     /// The current execution status of the task.
