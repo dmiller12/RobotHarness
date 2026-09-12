@@ -48,6 +48,11 @@ impl<P: LlmProvider> LlmClient<P> {
                     } else {
                         Some(result.content.clone())
                     },
+                    reasoning: if  result.tool_calls.is_empty() || result.reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(result.reasoning.clone())
+                    },
                     tool_calls: if result.tool_calls.is_empty() {
                         None
                     } else {

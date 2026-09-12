@@ -10,6 +10,7 @@ impl<T: LlmProvider + Send + Sync + 'static> AppProvider for T {}
 
 #[derive(Debug)]
 pub struct GenerationResult {
+    pub reasoning: String,
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
     pub usage: Option<Usage>,

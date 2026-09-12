@@ -109,6 +109,7 @@ impl LlmProvider for OpenAiProvider {
         }
         let mut event_source = EventSource::new(request_builder)?;
 
+        let mut final_reasoning = String::new();
         let mut final_content = String::new();
         let mut tool_calls_map: BTreeMap<usize, ToolCall> = BTreeMap::new();
 
@@ -132,6 +133,7 @@ impl LlmProvider for OpenAiProvider {
                                         if first_token_time.is_none() {
                                             first_token_time = Some(Instant::now());
                                         }
+                                        final_reasoning.push_str(&reasoning);
                                         let _ = tx.send(StreamEvent::Reasoning(reasoning));
                                     }
                                 }
@@ -226,6 +228,7 @@ impl LlmProvider for OpenAiProvider {
         let final_tool_calls: Vec<ToolCall> = tool_calls_map.into_values().collect();
 
         Ok(GenerationResult {
+            reasoning: final_reasoning,
             content: final_content,
             tool_calls: final_tool_calls,
             usage: final_usage,

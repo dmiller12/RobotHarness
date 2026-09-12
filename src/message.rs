@@ -47,6 +47,8 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         content: Option<String>, 
         #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning: Option<String>, 
+        #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_calls: Option<Vec<ToolCall>>, // Or your custom ToolCall struct
