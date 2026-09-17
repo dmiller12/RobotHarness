@@ -52,7 +52,7 @@ impl UserAction {
         let args = parts.get(1).unwrap_or(&"").trim().to_string();
 
         match cmd {
-            "eval" => UserAction::Eval,
+            "eval_loop" => UserAction::Eval,
             "frame" => UserAction::Frame { prompt: args },
             "planner" => {
                 if let Some(skill) = registry.skills.get(cmd).cloned() {
@@ -94,7 +94,11 @@ fn handle_submission<P: AppProvider>(app: &mut App<P>, action: UserAction) {
     match action {
         UserAction::Eval => spawn_eval_loop(app),
         UserAction::Standard { prompt, skill } => spawn_agent_task(app, prompt, skill, false),
-        UserAction::Planner { goal, skill } => spawn_agent_task(app, goal, Some(skill), true),
+        UserAction::Planner { goal, skill } => {
+            app.goal = Some(goal.clone());
+            spawn_agent_task(app, goal, Some(skill), true)
+        }
+
         UserAction::Frame { prompt } => spawn_agent_task(app, prompt, None, true),
     }
 }
@@ -134,6 +138,7 @@ fn spawn_agent_task<P: AppProvider>(
                 },
             });
         }
+        let mut allowed_tools = None;
 
         {
             let mut session = session_clone.lock().await;
@@ -142,6 +147,7 @@ fn spawn_agent_task<P: AppProvider>(
                     content: skill.instructions,
                     name: None,
                 });
+                allowed_tools = Some(skill.metadata.tools);
             }
             session.history.push(Message::User {
                 content: Content::Blocks(message_blocks),
@@ -154,6 +160,7 @@ fn spawn_agent_task<P: AppProvider>(
                 session_clone.clone(),
                 tx_clone.clone(),
                 Some(ReasoningEffort::High),
+                allowed_tools,
             )
             .await;
     });
@@ -182,6 +189,8 @@ fn spawn_eval_loop<P: AppProvider>(app: &mut App<P>) {
             .as_ref()
             .map(|s| s.instructions.clone())
             .unwrap_or_else(|| "Evaluate the current scene against the plan.".to_string());
+
+        let eval_tools = evaluator_skill.as_ref().map(|s| s.metadata.tools.clone());
 
         let mut isolated_eval_session = SessionData::new(&eval_prompt);
         isolated_eval_session.plan = initial_plan;
@@ -255,6 +264,7 @@ fn spawn_eval_loop<P: AppProvider>(app: &mut App<P>) {
                     eval_session_arc.clone(),
                     tx_clone.clone(),
                     Some(ReasoningEffort::None),
+                    eval_tools.clone(),
                 )
                 .await;
 

@@ -25,6 +25,7 @@ pub struct App<'a, P: LlmProvider + Send + Sync + 'static> {
     pub is_generating: bool,
     pub was_reasoning: bool,
     pub plan: Vec<Task>,
+    pub goal: Option<String>,
 
     pub active_reasoning_buffer: String,
     pub active_content_buffer: String,
@@ -77,6 +78,7 @@ impl<'a, P: LlmProvider + Send + Sync + 'static> App<'a, P> {
             llm_client: Arc::new(llm_client),
             exit: false,
             plan: initial_plan,
+            goal: None,
 
             is_generating: false,
             was_reasoning: false,

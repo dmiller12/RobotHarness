@@ -1,5 +1,5 @@
-pub mod read_file;
 pub mod create_plan;
+pub mod read_file;
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -93,8 +93,18 @@ impl ToolRegistry {
         self.tools.get(name).map(|t| t.as_ref())
     }
 
-    pub fn get_api_tools(&self) -> Vec<Tool> {
-        self.tools.values().map(|t| t.as_api_tool()).collect()
+    pub fn get_api_tools(&self, allowed_tools: Option<&[String]>) -> Vec<Tool> {
+        match allowed_tools {
+            // The specific state: O(1) lookup for requested tools
+            Some(names) => names
+                .iter()
+                .filter_map(|name| self.tools.get(name))
+                .map(|t| t.as_api_tool())
+                .collect(),
+
+            // The default state: iterate over all registered tools
+            None => self.tools.values().map(|t| t.as_api_tool()).collect(),
+        }
     }
 
     pub async fn execute_tool(

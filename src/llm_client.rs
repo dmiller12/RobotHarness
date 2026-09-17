@@ -27,13 +27,14 @@ impl<P: LlmProvider> LlmClient<P> {
         session_arc: Arc<Mutex<SessionData>>,
         tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
         reasoning_effort: Option<ReasoningEffort>,
+        allowed_tools: Option<Vec<String>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             let messages = {
                 let session = session_arc.lock().await;
                 session.history.clone()
             };
-            let tools = self.tool_registry.get_api_tools();
+            let tools = self.tool_registry.get_api_tools(allowed_tools.as_deref());
 
             let result = self
                 .provider
@@ -48,7 +49,7 @@ impl<P: LlmProvider> LlmClient<P> {
                     } else {
                         Some(result.content.clone())
                     },
-                    reasoning: if  result.tool_calls.is_empty() || result.reasoning.is_empty() {
+                    reasoning: if result.tool_calls.is_empty() || result.reasoning.is_empty() {
                         None
                     } else {
                         Some(result.reasoning.clone())

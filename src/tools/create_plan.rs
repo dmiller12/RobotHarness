@@ -50,7 +50,11 @@ impl AgentTool for CreatePlanTool {
             final_tasks.push(Task {
                 id: format!("task_{}", index + 1),
                 description: new_task.description,
-                status: TaskStatus::Pending,
+                status: if index == 0 {
+                    TaskStatus::InProgress
+                } else {
+                    TaskStatus::Pending
+                },
             });
         }
 
@@ -66,10 +70,16 @@ impl AgentTool for CreatePlanTool {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatusArgs {
+    Completed,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateTaskStatusArgs {
     pub task_id: String,
-    pub status: TaskStatus,
+    pub status: TaskStatusArgs,
 }
 
 pub struct UpdateTaskStatusTool {
@@ -83,7 +93,7 @@ impl AgentTool for UpdateTaskStatusTool {
     }
 
     fn description(&self) -> &'static str {
-        "Updates the status of a single existing task by its unique ID. Use this to transition a task to 'in_progress', 'completed', or 'failed'."
+        "Updates the status of a single existing task by its unique ID. Use this to transition a task to 'completed'"
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -100,37 +110,47 @@ impl AgentTool for UpdateTaskStatusTool {
 
         let mut session = self.session.lock().await;
 
-        // Constraint Check: Enforce maximum one 'in_progress' task
-        if parsed.status == TaskStatus::InProgress {
-            let active_tasks = session
-                .plan
-                .iter()
-                .filter(|t| t.status == TaskStatus::InProgress && t.id != parsed.task_id)
-                .count();
-
-            if active_tasks > 0 {
-                return Err(format!(
-                    "Constraint violation: Another task is currently 'in_progress'. You must update it to 'completed' or 'pending' before starting task '{}'.",
-                    parsed.task_id
-                ));
-            }
-        }
-
         // Locate and mutate the target task
         let task = session
             .plan
             .iter_mut()
             .find(|t| t.id == parsed.task_id)
-            .ok_or_else(|| format!("Task ID '{}' not found in the current plan.", parsed.task_id))?;
+            .ok_or_else(|| {
+                format!(
+                    "Task ID '{}' not found in the current plan.",
+                    parsed.task_id
+                )
+            })?;
 
-        task.status = parsed.status.clone();
+        let new_status = match parsed.status {
+            TaskStatusArgs::Completed => TaskStatus::Completed,
+        };
+        task.status = new_status;
+
+        // Auto-advance logic: The first non-completed/failed task becomes InProgress.
+        // All subsequent incomplete tasks are forced to Pending.
+        let mut assigned_in_progress = false;
+        for t in session.plan.iter_mut() {
+            if t.status == TaskStatus::Completed {
+                continue;
+            }
+            if !assigned_in_progress {
+                t.status = TaskStatus::InProgress;
+                assigned_in_progress = true;
+            } else if t.status == TaskStatus::InProgress {
+                t.status = TaskStatus::Pending;
+            }
+        }
+
         let updated_plan = session.plan.clone();
-        
         drop(session); // Release the lock before broadcasting
 
         let _ = tx.send(StreamEvent::PlanUpdated(updated_plan));
 
-        Ok(format!("Successfully updated task '{}' to '{:?}'.", parsed.task_id, parsed.status))
+        Ok(format!(
+            "Successfully updated task '{}' and recalculated active states.",
+            parsed.task_id
+        ))
     }
 
     fn roundtrip_on_success(&self) -> bool {

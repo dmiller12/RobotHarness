@@ -1,6 +1,7 @@
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{
-    CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution,
+    CameraFormat, CameraIndex, ControlValueSetter, FrameFormat, KnownCameraControl,
+    RequestedFormat, RequestedFormatType, Resolution,
 };
 
 use nokhwa::utils::ApiBackend;
@@ -52,6 +53,7 @@ pub fn start_camera_thread() -> watch::Receiver<Option<CameraFrame>> {
             eprintln!("Failed to open stream for camera {}: {}", index, e);
             return;
         }
+
         let mut clock_sync: Option<(Duration, Instant)> = None;
         loop {
             match camera.frame() {

@@ -2,7 +2,7 @@ use ratatui::widgets::Wrap;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
+    style::{Color, Style, Modifier},
     symbols::border,
     text::{Line, Span},
     widgets::{Block, Paragraph},
@@ -62,7 +62,6 @@ pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
         }
     }
 
-
     let latency_part = app.last_latency.as_ref().map_or(String::new(), |m| {
         format!(" | End-to-end: {}ms", m.as_millis())
     });
@@ -80,7 +79,7 @@ pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
     );
 
     let history_block = Block::bordered()
-        .title(Line::from(" Custom Harness ").centered())
+        .title(Line::from(" Robot Harness ").centered())
         .title_bottom(
             Line::from(Span::styled(
                 footer_text,
@@ -90,7 +89,15 @@ pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
         )
         .border_set(border::THICK);
 
-    let plan_items: Vec<Line> = app
+    let mut plan_items: Vec<Line> = Vec::new();
+    if let Some(goal) = &app.goal {
+        plan_items.push(Line::from(vec![
+            Span::styled(goal, Style::default().fg(Color::Cyan)),
+        ]));
+        // Add a spacer line between the goal and the task list
+        plan_items.push(Line::raw(""));
+    }
+    plan_items.extend(app
         .plan
         .iter()
         .map(|task| {
@@ -101,7 +108,7 @@ pub fn draw<P: AppProvider>(app: &mut App<P>, frame: &mut Frame) {
             };
             Line::raw(format!("{}{}", prefix, task.description))
         })
-        .collect();
+    );
 
     let plan_block = Block::bordered().title(" Plan ").border_set(border::THICK);
     frame.render_widget(Paragraph::new(plan_items).block(plan_block), main_chunks[1]);
@@ -134,7 +141,7 @@ pub fn append_chat_display<P: AppProvider>(app: &mut App<P>, role: Role, message
         Role::Assistant => ("Assistant: ", Color::Green),
         Role::System => ("System: ", Color::Yellow),
         Role::Tool => ("Tool: ", Color::Cyan),
-        Role::Info => ("Info: ", Color::Gray),
+        Role::Info => ("INFO: ", Color::Gray),
     };
 
     let mut spans = vec![Span::styled(prefix, Style::default().fg(color).bold())];
