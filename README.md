@@ -13,5 +13,5 @@ The harness provides two primary user commands:
 
 The harness carefully manages LLM context to enable local models on modest hardware.
 ## Demo
-<video src="https://github.com/user-attachments/assets/4bfcb79f-58e4-4628-bdad-2b8d6090b6e9" controls width="100%"></video>
+<video src="https://github.com/user-attachments/assets/12504391-19d4-407a-a972-fb3aae804069" controls width="100%"></video>
 A teleoperated SO101 arm executing a multi-step objective. The local Qwen3.5-4b model generates the sequence of atomic tasks and continuously evaluates visual progress in real time while the user provides the physical control.
